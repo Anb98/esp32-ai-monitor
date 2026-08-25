@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  ai-monitor-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai-monitor-backend
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - CLAUDE_CONFIG_DIR=/root/.claude
+      - GEMINI_CONFIG_DIR=/root/.gemini
+      - GOMEMLIMIT=8MiB
+    volumes:
+      - ${HOME}/.claude:/root/.claude:ro
+      - ${HOME}/.gemini:/root/.gemini:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
