@@ -2,7 +2,6 @@ package provider
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,35 +10,33 @@ import (
 	"github.com/esp32-ai-monitor/backend/internal/model"
 )
 
-type claudeCredsPayload struct {
-	SessionToken string `json:"session_token"`
-	Token        string `json:"token"`
-	ApiKey       string `json:"api_key"`
-	Expired      bool   `json:"expired"`
-	Quota5h      *struct {
-		Used           float64 `json:"used"`
-		Limit          float64 `json:"limit"`
-		ResetTimestamp int64   `json:"reset_timestamp"`
-	} `json:"quota_5h"`
-	QuotaWeekly *struct {
-		Used           float64 `json:"used"`
-		Limit          float64 `json:"limit"`
-		ResetTimestamp int64   `json:"reset_timestamp"`
-	} `json:"quota_weekly"`
-}
-
 type ClaudeEngine struct {
 	configDir string
+	home      string
 	scraper   *StatusScraper
+	prober    *AuthProber
 }
 
 func NewClaudeEngine(configDir string, scraper *StatusScraper) *ClaudeEngine {
+	home, _ := os.UserHomeDir()
+	return NewClaudeEngineWithProber(configDir, home, scraper, nil)
+}
+
+// NewClaudeEngineWithProber allows injecting a custom AuthProber (e.g. a
+// stub ProbeFunc in tests) instead of the real network probe wired by
+// NewClaudeEngine.
+func NewClaudeEngineWithProber(configDir, home string, scraper *StatusScraper, prober *AuthProber) *ClaudeEngine {
 	if scraper == nil {
 		scraper = NewStatusScraper()
 	}
+	if prober == nil {
+		prober = NewAuthProber(nil, probeClaudeAuth)
+	}
 	return &ClaudeEngine{
 		configDir: configDir,
+		home:      home,
 		scraper:   scraper,
+		prober:    prober,
 	}
 }
 
@@ -52,161 +49,73 @@ func (e *ClaudeEngine) Name() string {
 }
 
 func (e *ClaudeEngine) FetchMetrics(ctx context.Context) (*model.Provider, error) {
-	status := e.scraper.FetchClaudeStatus(ctx)
+	status, statusStale := e.scraper.FetchClaudeStatus(ctx)
 
-	p := &model.Provider{
-		ID:              e.ID(),
-		Name:            e.Name(),
-		Status:          status,
-		AuthValid:       false,
-		ReLoginRequired: true,
-		Metrics: model.ProviderMetrics{
-			Quota5h: model.QuotaWindow{
-				Used:           0,
-				Limit:          100,
-				Percentage:     0,
-				ResetTime:      "00:00",
-				ResetTimestamp: 0,
-			},
-			QuotaWeekly: model.QuotaWindow{
-				Used:           0,
-				Limit:          500,
-				Percentage:     0,
-				ResetTime:      "Dom 00:00",
-				ResetTimestamp: 0,
-			},
-		},
-	}
-
-	credsData, err := findAndReadCreds(e.configDir, []string{
-		"credentials.json",
-		"session.json",
-		"config.json",
-		".claude.json",
-	})
-	if err != nil || len(credsData) == 0 {
-		return p, nil
-	}
-
-	var creds claudeCredsPayload
-	if err := json.Unmarshal(credsData, &creds); err != nil {
-		return p, nil
-	}
-
-	token := creds.SessionToken
-	if token == "" {
-		token = creds.Token
-	}
-	if token == "" {
-		token = creds.ApiKey
-	}
-
-	if token == "" || creds.Expired {
-		return p, nil
-	}
-
-	p.AuthValid = true
-	p.ReLoginRequired = false
-
+	cred := ResolveClaudeCreds(e.configDir, e.home)
+	credMtime := fileMtime(filepath.Join(e.configDir, ".credentials.json"))
 	now := time.Now()
 
-	// 5h Quota calculation
-	var q5hUsed, q5hLimit float64 = 0.0, 100.0
-	var q5hResetTs int64
-	if creds.Quota5h != nil {
-		q5hUsed = creds.Quota5h.Used
-		if creds.Quota5h.Limit > 0 {
-			q5hLimit = creds.Quota5h.Limit
-		}
-		q5hResetTs = creds.Quota5h.ResetTimestamp
+	authState, authStale, checkedAt := e.prober.Classify(ctx, cred, credMtime, now)
+
+	if cred.State == CredAbsent && ClaudeJSONHasOAuthAccount(e.home) {
+		authStale = true
 	}
 
-	if q5hResetTs == 0 {
-		// Calculate default next 5-hour boundary
-		q5hReset := now.Add(2 * time.Hour).Truncate(time.Minute)
-		q5hResetTs = q5hReset.Unix()
+	p := &model.Provider{
+		ID:            e.ID(),
+		Name:          e.Name(),
+		Status:        status,
+		AuthCheckedAt: checkedAt,
+		Stale:         statusStale || authStale,
 	}
-	q5hTime := time.Unix(q5hResetTs, 0).Local()
-	q5hPct := 0.0
-	if q5hLimit > 0 {
-		q5hPct = (q5hUsed / q5hLimit) * 100.0
-	}
+	p.ApplyAuthState(authState)
 
-	p.Metrics.Quota5h = model.QuotaWindow{
-		Used:           q5hUsed,
-		Limit:          q5hLimit,
-		Percentage:     q5hPct,
-		ResetTime:      q5hTime.Format("15:04"),
-		ResetTimestamp: q5hResetTs,
-	}
-
-	// Weekly Quota calculation
-	var qWkUsed, qWkLimit float64 = 0.0, 500.0
-	var qWkResetTs int64
-	if creds.QuotaWeekly != nil {
-		qWkUsed = creds.QuotaWeekly.Used
-		if creds.QuotaWeekly.Limit > 0 {
-			qWkLimit = creds.QuotaWeekly.Limit
-		}
-		qWkResetTs = creds.QuotaWeekly.ResetTimestamp
-	}
-
-	if qWkResetTs == 0 {
-		// Calculate next Sunday 00:00
-		daysUntilSunday := (7 - int(now.Weekday())) % 7
-		if daysUntilSunday == 0 {
-			daysUntilSunday = 7
-		}
-		nextSun := time.Date(now.Year(), now.Month(), now.Day()+daysUntilSunday, 0, 0, 0, 0, now.Location())
-		qWkResetTs = nextSun.Unix()
-	}
-	qWkTime := time.Unix(qWkResetTs, 0).Local()
-	qWkPct := 0.0
-	if qWkLimit > 0 {
-		qWkPct = (qWkUsed / qWkLimit) * 100.0
-	}
-
-	p.Metrics.QuotaWeekly = model.QuotaWindow{
-		Used:           qWkUsed,
-		Limit:          qWkLimit,
-		Percentage:     qWkPct,
-		ResetTime:      formatWeeklyReset(qWkTime),
-		ResetTimestamp: qWkResetTs,
-	}
+	quota := e.prober.LastQuota()
+	p.Metrics.Quota5h = quotaWindow(quota.FiveHour, now, false)
+	p.Metrics.QuotaWeekly = quotaWindow(quota.SevenDay, now, true)
 
 	return p, nil
 }
 
-func findAndReadCreds(baseDir string, filenames []string) ([]byte, error) {
-	// If baseDir is directly a file
-	fi, err := os.Stat(baseDir)
-	if err == nil && !fi.IsDir() {
-		return os.ReadFile(baseDir)
-	}
+// The firmware UI is Spanish, and Go's time package only formats English day
+// and month names, so they are spelled out here.
+var (
+	shortWeekdaysES = [...]string{"Dom", "Lun", "Mar", "Mie", "Jue", "Vie", "Sab"}
+	shortMonthsES   = [...]string{"Ene", "Feb", "Mar", "Abr", "May", "Jun",
+		"Jul", "Ago", "Sep", "Oct", "Nov", "Dic"}
+)
 
-	for _, name := range filenames {
-		path := filepath.Join(baseDir, name)
-		data, err := os.ReadFile(path)
-		if err == nil && len(data) > 0 {
-			return data, nil
-		}
+// formatResetTime renders a reset instant for the display. The 5-hour window
+// always lands within the day, so the clock alone is unambiguous; the weekly
+// window can be days out, where a bare "09:00" reads as a time that already
+// passed today, so it carries the date too.
+func formatResetTime(t time.Time, withDate bool) string {
+	clock := t.Format("3:04 PM")
+	if !withDate {
+		return clock
 	}
-	return nil, os.ErrNotExist
+	return fmt.Sprintf("%s %d %s %s",
+		shortWeekdaysES[t.Weekday()],
+		t.Day(),
+		shortMonthsES[t.Month()-1],
+		clock)
 }
 
-func formatWeeklyReset(t time.Time) string {
-	days := map[time.Weekday]string{
-		time.Sunday:    "Dom",
-		time.Monday:    "Lun",
-		time.Tuesday:   "Mar",
-		time.Wednesday: "Mié",
-		time.Thursday:  "Jue",
-		time.Friday:    "Vie",
-		time.Saturday:  "Sáb",
+// quotaWindow projects one probed window onto the API model. Used and Limit
+// stay 0 because /api/oauth/usage exposes only a utilization percentage on
+// subscription plans, and a derived count would be a fabricated reading.
+func quotaWindow(info QuotaWindowInfo, now time.Time, datedReset bool) model.QuotaWindow {
+	if !info.Available {
+		return model.QuotaWindow{Available: false}
 	}
-	dayName := days[t.Weekday()]
-	if dayName == "" {
-		dayName = "Dom"
+
+	w := model.QuotaWindow{Available: true, Percentage: info.Percentage}
+	if !info.ResetsAt.IsZero() {
+		w.ResetTimestamp = info.ResetsAt.Unix()
+		if secs := int64(info.ResetsAt.Sub(now).Seconds()); secs > 0 {
+			w.ResetInSeconds = secs
+		}
+		w.ResetTime = formatResetTime(info.ResetsAt.Local(), datedReset)
 	}
-	return fmt.Sprintf("%s %02d:%02d", dayName, t.Hour(), t.Minute())
+	return w
 }
