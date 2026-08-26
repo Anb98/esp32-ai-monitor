@@ -173,6 +173,107 @@ func TestHandler_MethodNotAllowedAndOptions(t *testing.T) {
 	}
 }
 
+func TestHandleDashboard_GoldenJSON_AdditiveFieldsAndLegacyDerivation(t *testing.T) {
+	c := cache.New()
+
+	claude := model.Provider{
+		ID:     "claude",
+		Name:   "Claude Code",
+		Status: model.StatusOperational,
+		Stale:  false,
+		Metrics: model.ProviderMetrics{
+			Quota5h: model.QuotaWindow{
+				Used: 42.5, Limit: 100.0, Percentage: 42.5,
+				ResetTime: "15:30", ResetTimestamp: 1756090200,
+				Available: true, ResetInSeconds: 3600,
+			},
+			QuotaWeekly: model.QuotaWindow{
+				Available: false,
+			},
+		},
+	}
+	claude.ApplyAuthState(model.AuthStateUnknown)
+
+	c.Set(&model.DashboardResponse{
+		Timestamp: 1756083867,
+		Providers: []model.Provider{claude},
+		System:    model.SystemMetrics{UptimeSeconds: 3600, MemoryMB: 4.8},
+	})
+
+	h := api.NewHandler(c)
+	router := api.NewRouter(h)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/dashboard", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("failed to decode json: %v", err)
+	}
+
+	providers, ok := raw["providers"].([]any)
+	if !ok || len(providers) != 1 {
+		t.Fatalf("expected 1 provider in raw payload, got %v", raw["providers"])
+	}
+	p, ok := providers[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected provider to decode as an object")
+	}
+
+	// Legacy fields (unchanged type/meaning) must still be present.
+	for _, field := range []string{"id", "name", "status", "auth_valid", "re_login_required", "metrics"} {
+		if _, present := p[field]; !present {
+			t.Errorf("expected legacy field %q to still be present", field)
+		}
+	}
+
+	// auth_state=unknown MUST derive auth_valid=false AND re_login_required=false (never a false re-login).
+	if p["auth_state"] != "unknown" {
+		t.Errorf("expected auth_state=unknown, got %v", p["auth_state"])
+	}
+	if p["auth_valid"] != false {
+		t.Errorf("expected auth_valid=false for auth_state=unknown, got %v", p["auth_valid"])
+	}
+	if p["re_login_required"] != false {
+		t.Errorf("expected re_login_required=false for auth_state=unknown, got %v", p["re_login_required"])
+	}
+
+	if _, present := p["auth_checked_at"]; !present {
+		t.Error("expected additive field auth_checked_at to be present")
+	}
+	if _, present := p["stale"]; !present {
+		t.Error("expected additive field stale to be present")
+	}
+
+	metrics, ok := p["metrics"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected metrics to decode as an object")
+	}
+	q5h, ok := metrics["quota_5h"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected quota_5h to decode as an object")
+	}
+	if q5h["available"] != true {
+		t.Errorf("expected quota_5h.available=true, got %v", q5h["available"])
+	}
+	if q5h["reset_in_seconds"] != float64(3600) {
+		t.Errorf("expected quota_5h.reset_in_seconds=3600, got %v", q5h["reset_in_seconds"])
+	}
+
+	qWk, ok := metrics["quota_weekly"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected quota_weekly to decode as an object")
+	}
+	if qWk["available"] != false {
+		t.Errorf("expected quota_weekly.available=false when no live source exists, got %v", qWk["available"])
+	}
+}
+
 func TestRecoveryMiddleware(t *testing.T) {
 	panicHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		panic("simulated panic")
