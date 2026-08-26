@@ -9,7 +9,11 @@ static const char *TAG = "ES8311";
 
 AudioES8311 audio;
 
-AudioES8311::AudioES8311() : _volume(80), _initialized(false) {}
+AudioES8311::AudioES8311() : _volume(80), _initialized(false), _queue(nullptr) {}
+
+void AudioES8311::createQueue() {
+    _queue = xQueueCreate(2, sizeof(SoundType));
+}
 
 void AudioES8311::initI2C() {
     Wire.beginTransmission(ES8311_I2C_ADDR);
@@ -102,25 +106,50 @@ void AudioES8311::playTone(float freqHz, uint32_t durationMs) {
                 phase -= 2.0f * (float)M_PI;
             }
         }
-        i2s_write(I2S_NUM_0, buffer, chunk * 2 * sizeof(int16_t), &bytesWritten, portMAX_DELAY);
+        i2s_write(I2S_NUM_0, buffer, chunk * 2 * sizeof(int16_t), &bytesWritten, pdMS_TO_TICKS(200));
         samplesRemaining -= chunk;
     }
 }
 
-void AudioES8311::playDegradationAlert() {
-    ESP_LOGI(TAG, "Playing degradation warning tone (440Hz -> 330Hz)...");
-    playTone(440.0f, 200);
-    vTaskDelay(pdMS_TO_TICKS(50));
-    playTone(330.0f, 300);
+void AudioES8311::playSequence(SoundType type) {
+    switch (type) {
+        case SoundType::DEGRADATION_ALERT:
+            ESP_LOGI(TAG, "Playing degradation warning tone (440Hz -> 330Hz)...");
+            playTone(440.0f, 200);
+            vTaskDelay(pdMS_TO_TICKS(50));
+            playTone(330.0f, 300);
+            break;
+        case SoundType::RECOVERY_CHIME:
+            ESP_LOGI(TAG, "Playing operational recovery chime (C5 -> E5 -> G5)...");
+            playTone(523.25f, 150); // C5
+            vTaskDelay(pdMS_TO_TICKS(30));
+            playTone(659.25f, 150); // E5
+            vTaskDelay(pdMS_TO_TICKS(30));
+            playTone(783.99f, 250); // G5
+            break;
+        default:
+            break;
+    }
 }
 
-void AudioES8311::playRecoveryChime() {
-    ESP_LOGI(TAG, "Playing operational recovery chime (C5 -> E5 -> G5)...");
-    playTone(523.25f, 150); // C5
-    vTaskDelay(pdMS_TO_TICKS(30));
-    playTone(659.25f, 150); // E5
-    vTaskDelay(pdMS_TO_TICKS(30));
-    playTone(783.99f, 250); // G5
+void AudioES8311::triggerDegradationAlert() {
+    if (!_queue) return;
+    SoundType type = SoundType::DEGRADATION_ALERT;
+    xQueueSend(_queue, &type, 0);
+}
+
+void AudioES8311::triggerRecoveryChime() {
+    if (!_queue) return;
+    SoundType type = SoundType::RECOVERY_CHIME;
+    xQueueSend(_queue, &type, 0);
+}
+
+void AudioES8311::taskLoop() {
+    if (!_queue) return;
+    SoundType type;
+    if (xQueueReceive(_queue, &type, portMAX_DELAY) == pdTRUE) {
+        playSequence(type);
+    }
 }
 
 void AudioES8311::setVolume(uint8_t volume) {
