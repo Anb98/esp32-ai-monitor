@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "chunks": [
+    {
+      "id": "a73834fa",
+      "created_by": "rocke",
+      "created_at": "2026-08-25T06:21:18Z",
+      "sessions": 1,
+      "memories": 21,
+      "prompts": 0
+    },
+    {
+      "id": "e1570d3b",
+      "created_by": "rocke",
+      "created_at": "2026-08-25T06:26:57Z",
+      "sessions": 0,
+      "memories": 2,
+      "prompts": 0
+    },
+    {
+      "id": "8d025886",
+      "created_by": "rocke",
+      "created_at": "2026-08-26T01:30:59Z",
+      "sessions": 0,
+      "memories": 31,
+      "prompts": 0
+    }
+  ]
+}
