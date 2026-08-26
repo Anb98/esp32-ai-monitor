@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include "config.h"
+#include "ui_manager.h"
 
 class NetworkClient {
 public:
@@ -15,11 +16,18 @@ private:
     void ensureWiFi();
     void processDashboardJSON(const String &payload);
     void checkStatusTransition(const String &providerId, const String &newStatus);
+    void refreshStaleness();
+    void pushToUI();
 
     bool _connected;
-    String _lastStatusClaude;
-    String _lastStatusAntigravity;
+    // Throttles reconnect attempts; see ensureWiFi().
+    uint32_t _lastReconnectMs;
+    String _lastStatus;
     uint32_t _lastPollTime;
+    uint32_t _lastSuccessMs;
+    bool _hasData;
+    bool _lastPushedStale;
+    ProviderUIData _data;
 };
 
 extern NetworkClient networkClient;

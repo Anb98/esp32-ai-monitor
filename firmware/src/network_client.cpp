@@ -12,9 +12,12 @@ NetworkClient networkClient;
 
 NetworkClient::NetworkClient()
     : _connected(false),
-      _lastStatusClaude("operational"),
-      _lastStatusAntigravity("operational"),
-      _lastPollTime(0) {}
+      _lastReconnectMs(0),
+      _lastStatus("operational"),
+      _lastPollTime(0),
+      _lastSuccessMs(0),
+      _hasData(false),
+      _lastPushedStale(false) {}
 
 bool NetworkClient::init() {
     ESP_LOGI(TAG, "Initializing Wi-Fi client...");
@@ -33,26 +36,58 @@ void NetworkClient::ensureWiFi() {
     }
 
     _connected = false;
+
+    // WiFi.reconnect() tears down the association already in flight, so
+    // calling it on every 100 ms poll restarts the handshake before it can
+    // ever finish and the radio never associates. Retry slowly instead.
+    uint32_t now = millis();
+    if (_lastReconnectMs != 0 && now - _lastReconnectMs < WIFI_RECONNECT_INTERVAL_MS) {
+        return;
+    }
+    _lastReconnectMs = now;
+
     ESP_LOGW(TAG, "Wi-Fi not connected. Attempting reconnect...");
     WiFi.reconnect();
 }
 
 void NetworkClient::checkStatusTransition(const String &providerId, const String &newStatus) {
-    String *lastStatus = (providerId == "claude") ? &_lastStatusClaude : &_lastStatusAntigravity;
-
-    if (*lastStatus != newStatus) {
+    if (_lastStatus != newStatus) {
         ESP_LOGI(TAG, "Status transition for %s: %s -> %s",
-                 providerId.c_str(), lastStatus->c_str(), newStatus.c_str());
+                 providerId.c_str(), _lastStatus.c_str(), newStatus.c_str());
 
         if (newStatus == "degraded" || newStatus == "outage") {
-            // Degradation alert
-            audio.playDegradationAlert();
-        } else if (newStatus == "operational" && (*lastStatus == "degraded" || *lastStatus == "outage")) {
-            // Recovery chime
-            audio.playRecoveryChime();
+            audio.triggerDegradationAlert();
+        } else if (newStatus == "operational" && (_lastStatus == "degraded" || _lastStatus == "outage")) {
+            audio.triggerRecoveryChime();
         }
 
-        *lastStatus = newStatus;
+        _lastStatus = newStatus;
+    }
+}
+
+// Pushes the latest cached data to the UI, folding the device-observed
+// connectivity age into the backend-reported "stale" flag so a run of
+// failed polls reads as stale even if the payload itself claims otherwise.
+void NetworkClient::pushToUI() {
+    ProviderUIData local = _data;
+    local.stale = _data.stale || (millis() - _lastSuccessMs >= STALE_AFTER_MS);
+    _lastPushedStale = local.stale;
+
+    if (ui.uiLock()) {
+        ui.updateClaude(local);
+        ui.uiUnlock();
+    }
+}
+
+// Re-checks connectivity age independent of poll success/failure, so the
+// stale badge turns on even when polls keep failing and no fresh payload
+// ever arrives to trigger a redraw on its own.
+void NetworkClient::refreshStaleness() {
+    if (_hasData) {
+        bool stale = _data.stale || (millis() - _lastSuccessMs >= STALE_AFTER_MS);
+        if (stale != _lastPushedStale) {
+            pushToUI();
+        }
     }
 }
 
@@ -65,47 +100,42 @@ void NetworkClient::processDashboardJSON(const String &payload) {
         return;
     }
 
+    _lastSuccessMs = millis();
+
     JsonArray providers = doc["providers"];
     for (JsonObject p : providers) {
         String id = p["id"].as<String>();
-        String name = p["name"].as<String>();
-        String status = p["status"].as<String>();
-        bool authValid = p["auth_valid"].as<bool>();
-        bool reLoginReq = p["re_login_required"].as<bool>();
-
-        JsonObject q5h = p["metrics"]["quota_5h"];
-        float q5hUsed = q5h["used"].as<float>();
-        float q5hLimit = q5h["limit"].as<float>();
-        float q5hPct = q5h["percentage"].as<float>();
-        String q5hReset = q5h["reset_time"].as<String>();
-
-        JsonObject qWk = p["metrics"]["quota_weekly"];
-        float qWkUsed = qWk["used"].as<float>();
-        float qWkLimit = qWk["limit"].as<float>();
-        float qWkPct = qWk["percentage"].as<float>();
-        String qWkReset = qWk["reset_time"].as<String>();
 
         ProviderUIData uiData;
         uiData.id = id;
-        uiData.name = name;
-        uiData.status = status;
-        uiData.authValid = authValid;
-        uiData.reLoginRequired = reLoginReq;
-        uiData.quota5hUsed = q5hUsed;
-        uiData.quota5hLimit = q5hLimit;
-        uiData.quota5hPct = q5hPct;
-        uiData.quota5hResetTime = q5hReset;
-        uiData.quotaWeeklyUsed = qWkUsed;
-        uiData.quotaWeeklyLimit = qWkLimit;
-        uiData.quotaWeeklyPct = qWkPct;
-        uiData.quotaWeeklyResetTime = qWkReset;
+        uiData.name = p["name"].as<String>();
+        uiData.status = p["status"].as<String>();
+        uiData.authValid = p["auth_valid"].as<bool>();
+        uiData.reLoginRequired = p["re_login_required"].as<bool>();
+        uiData.authState = p["auth_state"].as<String>();
+        uiData.stale = p["stale"].as<bool>();
 
-        checkStatusTransition(id, status);
+        JsonObject q5h = p["metrics"]["quota_5h"];
+        uiData.quota5hUsed = q5h["used"].as<float>();
+        uiData.quota5hLimit = q5h["limit"].as<float>();
+        uiData.quota5hPct = q5h["percentage"].as<float>();
+        uiData.quota5hResetTime = q5h["reset_time"].as<String>();
+        uiData.quota5hAvailable = q5h["available"].as<bool>();
+        uiData.quota5hResetIn = q5h["reset_in_seconds"].as<int32_t>();
+
+        JsonObject qWk = p["metrics"]["quota_weekly"];
+        uiData.quotaWeeklyUsed = qWk["used"].as<float>();
+        uiData.quotaWeeklyLimit = qWk["limit"].as<float>();
+        uiData.quotaWeeklyPct = qWk["percentage"].as<float>();
+        uiData.quotaWeeklyResetTime = qWk["reset_time"].as<String>();
+        uiData.quotaWeeklyAvailable = qWk["available"].as<bool>();
+        uiData.quotaWeeklyResetIn = qWk["reset_in_seconds"].as<int32_t>();
 
         if (id == "claude") {
-            ui.updateClaude(uiData);
-        } else if (id == "antigravity") {
-            ui.updateAntigravity(uiData);
+            checkStatusTransition(id, uiData.status);
+            _data = uiData;
+            _hasData = true;
+            pushToUI();
         }
     }
 }
@@ -133,6 +163,7 @@ void NetworkClient::pollDashboard() {
 
 void NetworkClient::taskLoop() {
     ensureWiFi();
+    refreshStaleness();
     uint32_t now = millis();
     if (now - _lastPollTime >= POLL_INTERVAL_MS || _lastPollTime == 0) {
         _lastPollTime = now;
