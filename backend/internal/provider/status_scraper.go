@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"sync"
@@ -14,6 +15,8 @@ import (
 const (
 	defaultClaudeStatusURL = "https://status.claude.com/api/v2/summary.json"
 	claudeCodeComponentID  = "yyzkbfz2thpt"
+
+	statusFeedBodyLimit = 256 * 1024
 )
 
 type claudeSummaryResponse struct {
@@ -25,20 +28,21 @@ type claudeSummaryResponse struct {
 }
 
 type StatusScraper struct {
-	claudeURL      string
-	httpClient     *http.Client
+	claudeURL string
+
+	httpClient *http.Client
+
 	mu             sync.RWMutex
 	lastClaudeStat model.ProviderStatus
-	lastGoogleStat model.ProviderStatus
 }
 
 func NewStatusScraper() *StatusScraper {
-	return NewStatusScraperWithURL(defaultClaudeStatusURL, &http.Client{
+	return NewStatusScraperWithURLs(defaultClaudeStatusURL, &http.Client{
 		Timeout: 5 * time.Second,
 	})
 }
 
-func NewStatusScraperWithURL(claudeURL string, client *http.Client) *StatusScraper {
+func NewStatusScraperWithURLs(claudeURL string, client *http.Client) *StatusScraper {
 	if client == nil {
 		client = &http.Client{Timeout: 5 * time.Second}
 	}
@@ -46,62 +50,53 @@ func NewStatusScraperWithURL(claudeURL string, client *http.Client) *StatusScrap
 		claudeURL:      claudeURL,
 		httpClient:     client,
 		lastClaudeStat: model.StatusOperational,
-		lastGoogleStat: model.StatusOperational,
 	}
 }
 
-func (s *StatusScraper) FetchClaudeStatus(ctx context.Context) model.ProviderStatus {
+// FetchClaudeStatus queries status.claude.com and filters to the Claude Code
+// component. On any fetch/decode failure it returns the last known status
+// with stale=true rather than crashing or guessing.
+func (s *StatusScraper) FetchClaudeStatus(ctx context.Context) (model.ProviderStatus, bool) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.claudeURL, nil)
 	if err != nil {
-		s.mu.RLock()
-		defer s.mu.RUnlock()
-		return s.lastClaudeStat
+		return s.lastClaude(), true
 	}
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		log.Printf("[WARN] Failed to query Claude status upstream: %v", err)
-		s.mu.RLock()
-		defer s.mu.RUnlock()
-		return s.lastClaudeStat
+		return s.lastClaude(), true
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("[WARN] Claude status upstream returned non-200: %d", resp.StatusCode)
-		s.mu.RLock()
-		defer s.mu.RUnlock()
-		return s.lastClaudeStat
+		return s.lastClaude(), true
 	}
 
 	var summary claudeSummaryResponse
-	if err := json.NewDecoder(resp.Body).Decode(&summary); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, statusFeedBodyLimit)).Decode(&summary); err != nil {
 		log.Printf("[WARN] Failed to decode Claude status JSON: %v", err)
-		s.mu.RLock()
-		defer s.mu.RUnlock()
-		return s.lastClaudeStat
+		return s.lastClaude(), true
 	}
 
 	for _, comp := range summary.Components {
 		if comp.ID == claudeCodeComponentID {
-			mappedStatus := mapClaudeComponentStatus(comp.Status)
+			mapped := mapClaudeComponentStatus(comp.Status)
 			s.mu.Lock()
-			s.lastClaudeStat = mappedStatus
+			s.lastClaudeStat = mapped
 			s.mu.Unlock()
-			return mappedStatus
+			return mapped, false
 		}
 	}
 
+	return s.lastClaude(), true
+}
+
+func (s *StatusScraper) lastClaude() model.ProviderStatus {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.lastClaudeStat
-}
-
-func (s *StatusScraper) FetchGoogleStatus(ctx context.Context) model.ProviderStatus {
-	// Google status check with fallback to last known status
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.lastGoogleStat
 }
 
 func mapClaudeComponentStatus(status string) model.ProviderStatus {

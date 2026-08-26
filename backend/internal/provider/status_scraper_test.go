@@ -16,31 +16,12 @@ func TestClaudeStatusScraper_ComponentFiltering(t *testing.T) {
 		componentState string
 		expectedStatus model.ProviderStatus
 	}{
-		{
-			name:           "Operational component",
-			componentState: "operational",
-			expectedStatus: model.StatusOperational,
-		},
-		{
-			name:           "Degraded performance component",
-			componentState: "degraded_performance",
-			expectedStatus: model.StatusDegraded,
-		},
-		{
-			name:           "Under maintenance component",
-			componentState: "under_maintenance",
-			expectedStatus: model.StatusDegraded,
-		},
-		{
-			name:           "Major outage component",
-			componentState: "major_outage",
-			expectedStatus: model.StatusOutage,
-		},
-		{
-			name:           "Partial outage component",
-			componentState: "partial_outage",
-			expectedStatus: model.StatusOutage,
-		},
+		{"Operational component", "operational", model.StatusOperational},
+		{"Degraded performance component", "degraded_performance", model.StatusDegraded},
+		{"Under maintenance component", "under_maintenance", model.StatusDegraded},
+		{"Major outage component", "major_outage", model.StatusOutage},
+		{"Partial outage component", "partial_outage", model.StatusOutage},
+		{"Unrecognized status defaults to operational", "some_future_status", model.StatusOperational},
 	}
 
 	for _, tt := range tests {
@@ -57,18 +38,20 @@ func TestClaudeStatusScraper_ComponentFiltering(t *testing.T) {
 			}))
 			defer server.Close()
 
-			scraper := provider.NewStatusScraperWithURL(server.URL, server.Client())
-			status := scraper.FetchClaudeStatus(context.Background())
+			scraper := provider.NewStatusScraperWithURLs(server.URL, server.Client())
+			status, stale := scraper.FetchClaudeStatus(context.Background())
 
 			if status != tt.expectedStatus {
 				t.Errorf("expected status %v, got %v", tt.expectedStatus, status)
+			}
+			if stale {
+				t.Error("expected stale=false for a successful fetch")
 			}
 		})
 	}
 }
 
-func TestClaudeStatusScraper_NetworkFailureRetainsLastKnown(t *testing.T) {
-	// First successful call: degraded
+func TestClaudeStatusScraper_NetworkFailureRetainsLastKnownAndMarksStale(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -78,28 +61,87 @@ func TestClaudeStatusScraper_NetworkFailureRetainsLastKnown(t *testing.T) {
 			]
 		}`))
 	}))
-	defer server.Close()
 
-	scraper := provider.NewStatusScraperWithURL(server.URL, server.Client())
-	status := scraper.FetchClaudeStatus(context.Background())
-	if status != model.StatusDegraded {
-		t.Fatalf("expected initial status degraded, got %v", status)
+	scraper := provider.NewStatusScraperWithURLs(server.URL, server.Client())
+	status, stale := scraper.FetchClaudeStatus(context.Background())
+	if status != model.StatusDegraded || stale {
+		t.Fatalf("expected initial status degraded/not-stale, got status=%v stale=%v", status, stale)
 	}
 
-	// Now point to failing server or close server
 	server.Close()
 
-	// Subsequent call should retain last known valid status without panic
-	recoveredStatus := scraper.FetchClaudeStatus(context.Background())
+	recoveredStatus, recoveredStale := scraper.FetchClaudeStatus(context.Background())
 	if recoveredStatus != model.StatusDegraded {
 		t.Errorf("expected retained status degraded, got %v", recoveredStatus)
 	}
+	if !recoveredStale {
+		t.Error("expected stale=true after a failed fetch that falls back to last known")
+	}
 }
 
-func TestGoogleStatusScraper(t *testing.T) {
+func TestNewStatusScraper_ConstructsWithDefaultURLs(t *testing.T) {
 	scraper := provider.NewStatusScraper()
-	status := scraper.FetchGoogleStatus(context.Background())
-	if status != model.StatusOperational && status != model.StatusDegraded && status != model.StatusOutage {
-		t.Errorf("unexpected status %v", status)
+	if scraper == nil {
+		t.Fatal("expected a non-nil StatusScraper")
+	}
+}
+
+func TestNewStatusScraperWithURLs_NilClientDefaults(t *testing.T) {
+	scraper := provider.NewStatusScraperWithURLs("https://example.invalid", nil)
+	if scraper == nil {
+		t.Fatal("expected a non-nil StatusScraper when client is nil")
+	}
+}
+
+func TestClaudeStatusScraper_MalformedJSONRetainsLastKnownAndMarksStale(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{not valid json`))
+	}))
+	defer server.Close()
+
+	scraper := provider.NewStatusScraperWithURLs(server.URL, server.Client())
+	status, stale := scraper.FetchClaudeStatus(context.Background())
+
+	if status != model.StatusOperational {
+		t.Errorf("expected default last-known operational on malformed JSON, got %v", status)
+	}
+	if !stale {
+		t.Error("expected stale=true on malformed JSON")
+	}
+}
+
+func TestClaudeStatusScraper_Non200RetainsLastKnownAndMarksStale(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	scraper := provider.NewStatusScraperWithURLs(server.URL, server.Client())
+	status, stale := scraper.FetchClaudeStatus(context.Background())
+
+	if status != model.StatusOperational {
+		t.Errorf("expected default last-known operational on non-200, got %v", status)
+	}
+	if !stale {
+		t.Error("expected stale=true on non-200 response")
+	}
+}
+
+func TestClaudeStatusScraper_ComponentNotFoundFallsThroughToLastKnown(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"components":[{"id":"unrelated","name":"Other","status":"major_outage"}]}`))
+	}))
+	defer server.Close()
+
+	scraper := provider.NewStatusScraperWithURLs(server.URL, server.Client())
+	status, stale := scraper.FetchClaudeStatus(context.Background())
+
+	if status != model.StatusOperational {
+		t.Errorf("expected default last-known operational when the Claude Code component is absent, got %v", status)
+	}
+	if !stale {
+		t.Error("expected stale=true when the component of interest is not present in the response")
 	}
 }
