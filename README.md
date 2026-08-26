@@ -2,6 +2,8 @@
 
 Ambient AI provider quota/health monitor: a Go backend polls Claude Code credentials and its upstream status feed, and an ESP32-S3 AMOLED display (`firmware/`) shows the result.
 
+![The monitor showing Claude Code quota, service status and live reset countdowns](docs/device.jpg)
+
 ## Hardware
 
 This project targets exactly one board: the **Waveshare ESP32-S3-Touch-AMOLED-2.16**, bought from <https://es.aliexpress.com/item/1005011930415731.html>.
