@@ -10,7 +10,6 @@ type Config struct {
 	Port            string
 	PollInterval    time.Duration
 	ClaudeConfigDir string
-	GeminiConfigDir string
 }
 
 func LoadConfig() *Config {
@@ -30,19 +29,9 @@ func LoadConfig() *Config {
 		}
 	}
 
-	geminiDir := os.Getenv("GEMINI_CONFIG_DIR")
-	if geminiDir == "" {
-		if homeDir != "" {
-			geminiDir = filepath.Join(homeDir, ".gemini")
-		} else {
-			geminiDir = ".gemini"
-		}
-	}
-
 	return &Config{
 		Port:            port,
 		PollInterval:    30 * time.Second,
 		ClaudeConfigDir: claudeDir,
-		GeminiConfigDir: geminiDir,
 	}
 }

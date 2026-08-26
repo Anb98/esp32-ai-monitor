@@ -20,16 +20,15 @@ func main() {
 	log.Println("[INFO] Starting esp32-ai-monitor backend service...")
 
 	cfg := config.LoadConfig()
-	log.Printf("[INFO] Config loaded - Port: %s, PollInterval: %v, ClaudeDir: %s, GeminiDir: %s",
-		cfg.Port, cfg.PollInterval, cfg.ClaudeConfigDir, cfg.GeminiConfigDir)
+	log.Printf("[INFO] Config loaded - Port: %s, PollInterval: %v, ClaudeDir: %s",
+		cfg.Port, cfg.PollInterval, cfg.ClaudeConfigDir)
 
 	c := cache.New()
 	scraper := provider.NewStatusScraper()
 
 	claudeEngine := provider.NewClaudeEngine(cfg.ClaudeConfigDir, scraper)
-	antigravityEngine := provider.NewAntigravityEngine(cfg.GeminiConfigDir, scraper)
 
-	engines := []provider.ProviderEngine{claudeEngine, antigravityEngine}
+	engines := []provider.ProviderEngine{claudeEngine}
 	watcher := provider.NewTokenWatcher(engines, cfg.PollInterval)
 
 	ctx, cancel := context.WithCancel(context.Background())

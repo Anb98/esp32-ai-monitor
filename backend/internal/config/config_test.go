@@ -13,7 +13,6 @@ func TestLoadConfig_Defaults(t *testing.T) {
 	// Clear env vars
 	os.Unsetenv("PORT")
 	os.Unsetenv("CLAUDE_CONFIG_DIR")
-	os.Unsetenv("GEMINI_CONFIG_DIR")
 
 	cfg := config.LoadConfig()
 	if cfg == nil {
@@ -34,18 +33,12 @@ func TestLoadConfig_Defaults(t *testing.T) {
 		if cfg.ClaudeConfigDir != expectedClaude {
 			t.Errorf("expected ClaudeConfigDir %s, got %s", expectedClaude, cfg.ClaudeConfigDir)
 		}
-
-		expectedGemini := filepath.Join(home, ".gemini")
-		if cfg.GeminiConfigDir != expectedGemini {
-			t.Errorf("expected GeminiConfigDir %s, got %s", expectedGemini, cfg.GeminiConfigDir)
-		}
 	}
 }
 
 func TestLoadConfig_EnvOverrides(t *testing.T) {
 	t.Setenv("PORT", "9090")
 	t.Setenv("CLAUDE_CONFIG_DIR", "/custom/claude")
-	t.Setenv("GEMINI_CONFIG_DIR", "/custom/gemini")
 
 	cfg := config.LoadConfig()
 	if cfg == nil {
@@ -58,9 +51,5 @@ func TestLoadConfig_EnvOverrides(t *testing.T) {
 
 	if cfg.ClaudeConfigDir != "/custom/claude" {
 		t.Errorf("expected ClaudeConfigDir /custom/claude, got %s", cfg.ClaudeConfigDir)
-	}
-
-	if cfg.GeminiConfigDir != "/custom/gemini" {
-		t.Errorf("expected GeminiConfigDir /custom/gemini, got %s", cfg.GeminiConfigDir)
 	}
 }
