@@ -4,3 +4,15 @@
 # Go coverage artifacts
 backend/coverage
 backend/coverage.out
+
+# Local docker-compose host paths (see .env.example)
+.env
+backend/.env
+
+# Engram local store
+.engram/
+
+# Firmware Wi-Fi secrets (see firmware/secrets.ini.example)
+firmware/secrets.ini
+# Local AI runtime state
+.atl/
