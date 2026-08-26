@@ -5,25 +5,30 @@ static const char *TAG = "UIManager";
 
 UIManager ui;
 
-static void tileview_event_cb(lv_event_t *e) {
-    lv_event_code_t code = lv_event_get_code(e);
-    lv_obj_t *tv = lv_event_get_target(e);
-    if (code == LV_EVENT_VALUE_CHANGED) {
-        lv_obj_t *act = lv_tileview_get_tile_act(tv);
-        // Determine active screen index
-        lv_coord_t x = lv_obj_get_x(act);
-        uint8_t screenIdx = (x > 0) ? 1 : 0;
-        ui.showScreen(screenIdx);
+// Renders totalSeconds as "HH:MM:SS", or "Nd HH:MM" once it spans a day or
+// more (a 5h/weekly reset countdown can legitimately reach several days).
+static void formatCountdown(int32_t totalSeconds, char *buf, size_t bufLen) {
+    if (totalSeconds < 0) totalSeconds = 0;
+    int32_t days = totalSeconds / 86400;
+    int32_t rem = totalSeconds % 86400;
+    int32_t hours = rem / 3600;
+    int32_t minutes = (rem % 3600) / 60;
+    int32_t seconds = rem % 60;
+    if (days > 0) {
+        snprintf(buf, bufLen, "%ldd %02ld:%02ld", (long)days, (long)hours, (long)minutes);
+    } else {
+        snprintf(buf, bufLen, "%02ld:%02ld:%02ld", (long)hours, (long)minutes, (long)seconds);
     }
 }
 
 UIManager::UIManager()
-    : _activeScreen(0),
-      _screenTileview(nullptr),
-      _tileClaude(nullptr),
-      _tileAntigravity(nullptr),
+    : _lock(nullptr),
+      _cardClaude(nullptr),
+      _countdownClaude{false, 0, 0},
+      _countdownWeeklyClaude{false, 0, 0},
       _pillClaude(nullptr),
       _pillLabelClaude(nullptr),
+      _staleBadgeClaude(nullptr),
       _bar5hClaude(nullptr),
       _label5hPctClaude(nullptr),
       _label5hResetClaude(nullptr),
@@ -31,22 +36,31 @@ UIManager::UIManager()
       _labelWkPctClaude(nullptr),
       _labelWkResetClaude(nullptr),
       _overlayClaude(nullptr),
-      _pillAntigravity(nullptr),
-      _pillLabelAntigravity(nullptr),
-      _bar5hAntigravity(nullptr),
-      _label5hPctAntigravity(nullptr),
-      _label5hResetAntigravity(nullptr),
-      _barWkAntigravity(nullptr),
-      _labelWkPctAntigravity(nullptr),
-      _labelWkResetAntigravity(nullptr),
-      _overlayAntigravity(nullptr),
-      _dot1(nullptr),
-      _dot2(nullptr) {}
+      _countdownCaptionClaude(nullptr),
+      _countdownValueClaude(nullptr),
+      _countdownCaptionWeeklyClaude(nullptr),
+      _countdownValueWeeklyClaude(nullptr) {}
+
+void UIManager::createLock() {
+    _lock = xSemaphoreCreateMutex();
+}
+
+bool UIManager::uiLock() {
+    if (!_lock) return false;
+    return xSemaphoreTake(_lock, pdMS_TO_TICKS(100)) == pdTRUE;
+}
+
+void UIManager::uiUnlock() {
+    if (_lock) {
+        xSemaphoreGive(_lock);
+    }
+}
 
 void UIManager::init() {
     ESP_LOGI(TAG, "Initializing LVGL UI Manager...");
 
-    lv_init();
+    // lv_init() runs in setup() before the display driver registers itself,
+    // so by the time we get here LVGL is already up.
 
     // Dark background for root screen
     lv_obj_t *scr = lv_scr_act();
@@ -54,7 +68,7 @@ void UIManager::init() {
     lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
     createScreenViews();
-    updateIndicatorDots();
+    lv_timer_create(countdownTimerCb, 1000, nullptr);
 
     ESP_LOGI(TAG, "LVGL UI Manager initialized.");
 }
@@ -62,54 +76,30 @@ void UIManager::init() {
 void UIManager::createScreenViews() {
     lv_obj_t *scr = lv_scr_act();
 
-    _screenTileview = lv_tileview_create(scr);
-    lv_obj_set_size(_screenTileview, LCD_WIDTH, LCD_HEIGHT - 30);
-    lv_obj_set_pos(_screenTileview, 0, 0);
-    lv_obj_set_style_bg_opa(_screenTileview, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_add_event_cb(_screenTileview, tileview_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    _cardClaude = lv_obj_create(scr);
+    lv_obj_set_size(_cardClaude, LCD_WIDTH, LCD_HEIGHT);
+    lv_obj_set_pos(_cardClaude, 0, 0);
+    lv_obj_set_style_bg_opa(_cardClaude, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(_cardClaude, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(_cardClaude, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(_cardClaude, LV_OBJ_FLAG_SCROLLABLE);
 
-    _tileClaude = lv_tileview_add_tile(_screenTileview, 0, 0, LV_DIR_HOR);
-    _tileAntigravity = lv_tileview_add_tile(_screenTileview, 1, 0, LV_DIR_HOR);
-
-    buildProviderScreen(0, "Claude Code", &_tileClaude,
-                        &_pillClaude, &_pillLabelClaude,
+    buildProviderScreen("Claude Code", &_cardClaude,
+                        &_pillClaude, &_pillLabelClaude, &_staleBadgeClaude,
                         &_bar5hClaude, &_label5hPctClaude, &_label5hResetClaude,
                         &_barWkClaude, &_labelWkPctClaude, &_labelWkResetClaude,
-                        &_overlayClaude);
-
-    buildProviderScreen(1, "Google Antigravity", &_tileAntigravity,
-                        &_pillAntigravity, &_pillLabelAntigravity,
-                        &_bar5hAntigravity, &_label5hPctAntigravity, &_label5hResetAntigravity,
-                        &_barWkAntigravity, &_labelWkPctAntigravity, &_labelWkResetAntigravity,
-                        &_overlayAntigravity);
-
-    // Indicator dots container at bottom
-    lv_obj_t *dotsCont = lv_obj_create(scr);
-    lv_obj_set_size(dotsCont, 80, 24);
-    lv_obj_align(dotsCont, LV_ALIGN_BOTTOM_MID, 0, -4);
-    lv_obj_set_style_bg_opa(dotsCont, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_border_width(dotsCont, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(dotsCont, 0, LV_PART_MAIN);
-    lv_obj_clear_flag(dotsCont, LV_OBJ_FLAG_SCROLLABLE);
-
-    _dot1 = lv_obj_create(dotsCont);
-    lv_obj_set_size(_dot1, 10, 10);
-    lv_obj_set_pos(_dot1, 24, 7);
-    lv_obj_set_style_radius(_dot1, LV_RADIUS_CIRCLE, LV_PART_MAIN);
-    lv_obj_set_style_border_width(_dot1, 0, LV_PART_MAIN);
-
-    _dot2 = lv_obj_create(dotsCont);
-    lv_obj_set_size(_dot2, 10, 10);
-    lv_obj_set_pos(_dot2, 46, 7);
-    lv_obj_set_style_radius(_dot2, LV_RADIUS_CIRCLE, LV_PART_MAIN);
-    lv_obj_set_style_border_width(_dot2, 0, LV_PART_MAIN);
+                        &_overlayClaude,
+                        &_countdownCaptionClaude, &_countdownValueClaude,
+                        &_countdownCaptionWeeklyClaude, &_countdownValueWeeklyClaude);
 }
 
-void UIManager::buildProviderScreen(uint8_t screenIdx, const char *title, lv_obj_t **screenObj,
-                                    lv_obj_t **pillObj, lv_obj_t **pillLabelObj,
+void UIManager::buildProviderScreen(const char *title, lv_obj_t **screenObj,
+                                    lv_obj_t **pillObj, lv_obj_t **pillLabelObj, lv_obj_t **staleBadgeObj,
                                     lv_obj_t **bar5hObj, lv_obj_t **label5hPctObj, lv_obj_t **label5hResetObj,
                                     lv_obj_t **barWkObj, lv_obj_t **labelWkPctObj, lv_obj_t **labelWkResetObj,
-                                    lv_obj_t **overlayObj) {
+                                    lv_obj_t **overlayObj,
+                                    lv_obj_t **countdownCaptionObj, lv_obj_t **countdownValueObj,
+                                    lv_obj_t **countdownCaptionWeeklyObj, lv_obj_t **countdownValueWeeklyObj) {
     lv_obj_t *parent = *screenObj;
     lv_obj_clear_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -118,13 +108,13 @@ void UIManager::buildProviderScreen(uint8_t screenIdx, const char *title, lv_obj
     lv_label_set_text(lblTitle, title);
     lv_obj_set_style_text_color(lblTitle, lv_color_hex(0xF8FAFC), LV_PART_MAIN);
     lv_obj_set_style_text_font(lblTitle, &lv_font_montserrat_24, LV_PART_MAIN);
-    lv_obj_align(lblTitle, LV_ALIGN_TOP_LEFT, 28, 28);
+    lv_obj_align(lblTitle, LV_ALIGN_TOP_LEFT, 36, 28);
 
     // Status Pill
     *pillObj = lv_obj_create(parent);
-    lv_obj_set_size(*pillObj, 130, 32);
-    lv_obj_align(*pillObj, LV_ALIGN_TOP_RIGHT, -28, 26);
-    lv_obj_set_style_radius(*pillObj, 16, LV_PART_MAIN);
+    lv_obj_set_size(*pillObj, 130, 28);
+    lv_obj_align(*pillObj, LV_ALIGN_TOP_RIGHT, -36, 26);
+    lv_obj_set_style_radius(*pillObj, 14, LV_PART_MAIN);
     lv_obj_set_style_border_width(*pillObj, 0, LV_PART_MAIN);
     lv_obj_set_style_bg_color(*pillObj, lv_color_hex(0x065F46), LV_PART_MAIN); // Green base
     lv_obj_clear_flag(*pillObj, LV_OBJ_FLAG_SCROLLABLE);
@@ -135,65 +125,126 @@ void UIManager::buildProviderScreen(uint8_t screenIdx, const char *title, lv_obj
     lv_obj_set_style_text_font(*pillLabelObj, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_obj_center(*pillLabelObj);
 
+    // Stale/disconnected badge, hidden while the payload is fresh. Bottom-
+    // centred rather than stacked under the status pill: at TOP_RIGHT it
+    // overlapped the 5h percentage, and stale is orthogonal to status, so both
+    // must stay legible at once. It also sits below the re-login overlay,
+    // which ends at y=390, so a modal never hides the connection warning.
+    *staleBadgeObj = lv_obj_create(parent);
+    lv_obj_set_size(*staleBadgeObj, 130, 24);
+    lv_obj_align(*staleBadgeObj, LV_ALIGN_TOP_MID, 0, 430);
+    lv_obj_set_style_radius(*staleBadgeObj, 12, LV_PART_MAIN);
+    lv_obj_set_style_border_width(*staleBadgeObj, 0, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(*staleBadgeObj, lv_color_hex(0x475569), LV_PART_MAIN);
+    lv_obj_clear_flag(*staleBadgeObj, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *lblStale = lv_label_create(*staleBadgeObj);
+    lv_label_set_text(lblStale, "SIN CONEXION");
+    lv_obj_set_style_text_color(lblStale, lv_color_hex(0xFBBF24), LV_PART_MAIN);
+    lv_obj_set_style_text_font(lblStale, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_center(lblStale);
+    lv_obj_add_flag(*staleBadgeObj, LV_OBJ_FLAG_HIDDEN);
+
     // 5-Hour Quota Section
     lv_obj_t *lbl5hHeader = lv_label_create(parent);
     lv_label_set_text(lbl5hHeader, "Cuota 5 Horas");
     lv_obj_set_style_text_color(lbl5hHeader, lv_color_hex(0x94A3B8), LV_PART_MAIN);
-    lv_obj_set_style_text_font(lbl5hHeader, &lv_font_montserrat_16, LV_PART_MAIN);
-    lv_obj_align(lbl5hHeader, LV_ALIGN_TOP_LEFT, 28, 90);
+    lv_obj_set_style_text_font(lbl5hHeader, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_align(lbl5hHeader, LV_ALIGN_TOP_LEFT, 36, 78);
 
     *label5hPctObj = lv_label_create(parent);
     lv_label_set_text(*label5hPctObj, "0.0%");
     lv_obj_set_style_text_color(*label5hPctObj, lv_color_hex(0xF8FAFC), LV_PART_MAIN);
-    lv_obj_set_style_text_font(*label5hPctObj, &lv_font_montserrat_20, LV_PART_MAIN);
-    lv_obj_align(*label5hPctObj, LV_ALIGN_TOP_RIGHT, -28, 88);
+    lv_obj_set_style_text_font(*label5hPctObj, &lv_font_montserrat_24, LV_PART_MAIN);
+    lv_obj_align(*label5hPctObj, LV_ALIGN_TOP_RIGHT, -36, 76);
 
     *bar5hObj = lv_bar_create(parent);
-    lv_obj_set_size(*bar5hObj, 424, 22);
-    lv_obj_align(*bar5hObj, LV_ALIGN_TOP_MID, 0, 122);
+    lv_obj_set_size(*bar5hObj, 408, 18);
+    lv_obj_align(*bar5hObj, LV_ALIGN_TOP_MID, 0, 112);
     lv_obj_set_style_bg_color(*bar5hObj, lv_color_hex(0x1E293B), LV_PART_MAIN);
     lv_obj_set_style_bg_color(*bar5hObj, lv_color_hex(0x10B981), LV_PART_INDICATOR);
-    lv_obj_set_style_radius(*bar5hObj, 11, LV_PART_MAIN);
-    lv_obj_set_style_radius(*bar5hObj, 11, LV_PART_INDICATOR);
+    lv_obj_set_style_radius(*bar5hObj, 9, LV_PART_MAIN);
+    lv_obj_set_style_radius(*bar5hObj, 9, LV_PART_INDICATOR);
     lv_bar_set_value(*bar5hObj, 0, LV_ANIM_ON);
 
     *label5hResetObj = lv_label_create(parent);
     lv_label_set_text(*label5hResetObj, "Reset: 00:00");
     lv_obj_set_style_text_color(*label5hResetObj, lv_color_hex(0x64748B), LV_PART_MAIN);
-    lv_obj_set_style_text_font(*label5hResetObj, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_align(*label5hResetObj, LV_ALIGN_TOP_LEFT, 28, 152);
+    lv_obj_set_style_text_font(*label5hResetObj, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_align(*label5hResetObj, LV_ALIGN_TOP_LEFT, 36, 136);
 
     // Weekly Quota Section
     lv_obj_t *lblWkHeader = lv_label_create(parent);
     lv_label_set_text(lblWkHeader, "Cuota Semanal");
     lv_obj_set_style_text_color(lblWkHeader, lv_color_hex(0x94A3B8), LV_PART_MAIN);
-    lv_obj_set_style_text_font(lblWkHeader, &lv_font_montserrat_16, LV_PART_MAIN);
-    lv_obj_align(lblWkHeader, LV_ALIGN_TOP_LEFT, 28, 205);
+    lv_obj_set_style_text_font(lblWkHeader, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_align(lblWkHeader, LV_ALIGN_TOP_LEFT, 36, 170);
 
     *labelWkPctObj = lv_label_create(parent);
     lv_label_set_text(*labelWkPctObj, "0.0%");
     lv_obj_set_style_text_color(*labelWkPctObj, lv_color_hex(0xF8FAFC), LV_PART_MAIN);
-    lv_obj_set_style_text_font(*labelWkPctObj, &lv_font_montserrat_20, LV_PART_MAIN);
-    lv_obj_align(*labelWkPctObj, LV_ALIGN_TOP_RIGHT, -28, 203);
+    lv_obj_set_style_text_font(*labelWkPctObj, &lv_font_montserrat_24, LV_PART_MAIN);
+    lv_obj_align(*labelWkPctObj, LV_ALIGN_TOP_RIGHT, -36, 168);
 
     *barWkObj = lv_bar_create(parent);
-    lv_obj_set_size(*barWkObj, 424, 22);
-    lv_obj_align(*barWkObj, LV_ALIGN_TOP_MID, 0, 237);
+    lv_obj_set_size(*barWkObj, 408, 18);
+    lv_obj_align(*barWkObj, LV_ALIGN_TOP_MID, 0, 204);
     lv_obj_set_style_bg_color(*barWkObj, lv_color_hex(0x1E293B), LV_PART_MAIN);
     lv_obj_set_style_bg_color(*barWkObj, lv_color_hex(0x10B981), LV_PART_INDICATOR);
-    lv_obj_set_style_radius(*barWkObj, 11, LV_PART_MAIN);
-    lv_obj_set_style_radius(*barWkObj, 11, LV_PART_INDICATOR);
+    lv_obj_set_style_radius(*barWkObj, 9, LV_PART_MAIN);
+    lv_obj_set_style_radius(*barWkObj, 9, LV_PART_INDICATOR);
     lv_bar_set_value(*barWkObj, 0, LV_ANIM_ON);
 
     *labelWkResetObj = lv_label_create(parent);
     lv_label_set_text(*labelWkResetObj, "Reset: Dom 00:00");
     lv_obj_set_style_text_color(*labelWkResetObj, lv_color_hex(0x64748B), LV_PART_MAIN);
-    lv_obj_set_style_text_font(*labelWkResetObj, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_align(*labelWkResetObj, LV_ALIGN_TOP_LEFT, 28, 267);
+    lv_obj_set_style_text_font(*labelWkResetObj, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_align(*labelWkResetObj, LV_ALIGN_TOP_LEFT, 36, 228);
 
-    // Warning Overlay Card (Modal for Re-login required)
+    // Countdown container: transparent, sole occupant of the lower half
+    lv_obj_t *countdownCont = lv_obj_create(parent);
+    lv_obj_set_size(countdownCont, 480, 206);
+    lv_obj_set_pos(countdownCont, 0, 274);
+    lv_obj_set_style_bg_opa(countdownCont, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(countdownCont, 0, LV_PART_MAIN);
+    // lv_obj_create inherits the theme's card padding; zero it so the child
+    // offsets below are absolute within the container, not pad-relative.
+    lv_obj_set_style_pad_all(countdownCont, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(countdownCont, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Two stacked countdowns rather than two equal columns: the 5h window is
+    // the one that actually blocks work, so it stays the 48px hero and the
+    // weekly window reads as 28px context below it. A 4px caption-to-value gap
+    // binds each pair; the 16px gap between pairs separates them. Both stay
+    // above y=165 so the re-login overlay covers them completely.
+    *countdownCaptionObj = lv_label_create(countdownCont);
+    lv_label_set_text(*countdownCaptionObj, "RESET 5H");
+    lv_obj_set_style_text_color(*countdownCaptionObj, lv_color_hex(0x94A3B8), LV_PART_MAIN);
+    lv_obj_set_style_text_font(*countdownCaptionObj, &lv_font_montserrat_16, LV_PART_MAIN);
+    lv_obj_align(*countdownCaptionObj, LV_ALIGN_TOP_MID, 0, 4);
+
+    *countdownValueObj = lv_label_create(countdownCont);
+    lv_label_set_text(*countdownValueObj, "--:--:--");
+    lv_obj_set_style_text_color(*countdownValueObj, lv_color_hex(0xF8FAFC), LV_PART_MAIN);
+    lv_obj_set_style_text_font(*countdownValueObj, &lv_font_montserrat_48, LV_PART_MAIN);
+    lv_obj_align(*countdownValueObj, LV_ALIGN_TOP_MID, 0, 26);
+
+    *countdownCaptionWeeklyObj = lv_label_create(countdownCont);
+    lv_label_set_text(*countdownCaptionWeeklyObj, "RESET SEMANAL");
+    lv_obj_set_style_text_color(*countdownCaptionWeeklyObj, lv_color_hex(0x94A3B8), LV_PART_MAIN);
+    lv_obj_set_style_text_font(*countdownCaptionWeeklyObj, &lv_font_montserrat_16, LV_PART_MAIN);
+    lv_obj_align(*countdownCaptionWeeklyObj, LV_ALIGN_TOP_MID, 0, 92);
+
+    *countdownValueWeeklyObj = lv_label_create(countdownCont);
+    lv_label_set_text(*countdownValueWeeklyObj, "--:--:--");
+    lv_obj_set_style_text_color(*countdownValueWeeklyObj, lv_color_hex(0xF8FAFC), LV_PART_MAIN);
+    lv_obj_set_style_text_font(*countdownValueWeeklyObj, &lv_font_montserrat_28, LV_PART_MAIN);
+    lv_obj_align(*countdownValueWeeklyObj, LV_ALIGN_TOP_MID, 0, 114);
+
+    // Warning Overlay Card (Modal for Re-login required); the only widget
+    // allowed to cover the lower half besides the countdown container.
     *overlayObj = lv_obj_create(parent);
-    lv_obj_set_size(*overlayObj, 424, 220);
+    lv_obj_set_size(*overlayObj, 408, 220);
     lv_obj_align(*overlayObj, LV_ALIGN_CENTER, 0, 40);
     lv_obj_set_style_bg_color(*overlayObj, lv_color_hex(0x7F1D1D), LV_PART_MAIN); // Red background
     lv_obj_set_style_radius(*overlayObj, 16, LV_PART_MAIN);
@@ -214,11 +265,7 @@ void UIManager::buildProviderScreen(uint8_t screenIdx, const char *title, lv_obj
     lv_obj_align(lblWarnTitle, LV_ALIGN_TOP_MID, 0, 50);
 
     lv_obj_t *lblWarnSub = lv_label_create(*overlayObj);
-    if (screenIdx == 0) {
-        lv_label_set_text(lblWarnSub, "Ejecuta 'claude' en terminal");
-    } else {
-        lv_label_set_text(lblWarnSub, "Ejecuta 'agy login' en terminal");
-    }
+    lv_label_set_text(lblWarnSub, "Ejecuta 'claude' en terminal");
     lv_obj_set_style_text_color(lblWarnSub, lv_color_hex(0xFECACA), LV_PART_MAIN);
     lv_obj_set_style_text_font(lblWarnSub, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_obj_align(lblWarnSub, LV_ALIGN_BOTTOM_MID, 0, -25);
@@ -238,7 +285,7 @@ lv_color_t UIManager::getQuotaBarColor(float pct) {
 }
 
 void UIManager::updateScreenWidgets(const ProviderUIData &data,
-                                    lv_obj_t *pillObj, lv_obj_t *pillLabelObj,
+                                    lv_obj_t *pillObj, lv_obj_t *pillLabelObj, lv_obj_t *staleBadgeObj,
                                     lv_obj_t *bar5hObj, lv_obj_t *label5hPctObj, lv_obj_t *label5hResetObj,
                                     lv_obj_t *barWkObj, lv_obj_t *labelWkPctObj, lv_obj_t *labelWkResetObj,
                                     lv_obj_t *overlayObj) {
@@ -257,73 +304,125 @@ void UIManager::updateScreenWidgets(const ProviderUIData &data,
         lv_obj_set_style_text_color(pillLabelObj, lv_color_hex(0xFEE2E2), LV_PART_MAIN);
     }
 
-    // Update 5h Quota Bar & Labels
-    char buf5h[32];
-    snprintf(buf5h, sizeof(buf5h), "%.1f%%", data.quota5hPct);
-    lv_label_set_text(label5hPctObj, buf5h);
+    // Stale/disconnected badge (label text is fixed at creation time)
+    if (data.stale) {
+        lv_obj_clear_flag(staleBadgeObj, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(staleBadgeObj, LV_OBJ_FLAG_HIDDEN);
+    }
 
-    char buf5hReset[48];
-    snprintf(buf5hReset, sizeof(buf5hReset), "Reset: %s", data.quota5hResetTime.c_str());
-    lv_label_set_text(label5hResetObj, buf5hReset);
+    // 5h Quota Bar & Labels
+    if (data.quota5hAvailable) {
+        char buf5h[32];
+        snprintf(buf5h, sizeof(buf5h), "%.1f%%", data.quota5hPct);
+        lv_label_set_text(label5hPctObj, buf5h);
+        lv_obj_set_style_text_color(label5hPctObj, lv_color_hex(0xF8FAFC), LV_PART_MAIN);
 
-    lv_bar_set_value(bar5hObj, (int32_t)data.quota5hPct, LV_ANIM_ON);
-    lv_obj_set_style_bg_color(bar5hObj, getQuotaBarColor(data.quota5hPct), LV_PART_INDICATOR);
+        char buf5hReset[48];
+        snprintf(buf5hReset, sizeof(buf5hReset), "Reset: %s", data.quota5hResetTime.c_str());
+        lv_label_set_text(label5hResetObj, buf5hReset);
 
-    // Update Weekly Quota Bar & Labels
-    char bufWk[32];
-    snprintf(bufWk, sizeof(bufWk), "%.1f%%", data.quotaWeeklyPct);
-    lv_label_set_text(labelWkPctObj, bufWk);
+        lv_bar_set_value(bar5hObj, (int32_t)data.quota5hPct, LV_ANIM_ON);
+        lv_obj_set_style_bg_color(bar5hObj, getQuotaBarColor(data.quota5hPct), LV_PART_INDICATOR);
+    } else {
+        lv_label_set_text(label5hPctObj, "Sin datos");
+        lv_obj_set_style_text_color(label5hPctObj, lv_color_hex(0x64748B), LV_PART_MAIN);
+        lv_label_set_text(label5hResetObj, "");
+        lv_bar_set_value(bar5hObj, 0, LV_ANIM_OFF);
+        lv_obj_set_style_bg_color(bar5hObj, lv_color_hex(0x334155), LV_PART_INDICATOR);
+    }
 
-    char bufWkReset[48];
-    snprintf(bufWkReset, sizeof(bufWkReset), "Reset: %s", data.quotaWeeklyResetTime.c_str());
-    lv_label_set_text(labelWkResetObj, bufWkReset);
+    // Weekly Quota Bar & Labels
+    if (data.quotaWeeklyAvailable) {
+        char bufWk[32];
+        snprintf(bufWk, sizeof(bufWk), "%.1f%%", data.quotaWeeklyPct);
+        lv_label_set_text(labelWkPctObj, bufWk);
+        lv_obj_set_style_text_color(labelWkPctObj, lv_color_hex(0xF8FAFC), LV_PART_MAIN);
 
-    lv_bar_set_value(barWkObj, (int32_t)data.quotaWeeklyPct, LV_ANIM_ON);
-    lv_obj_set_style_bg_color(barWkObj, getQuotaBarColor(data.quotaWeeklyPct), LV_PART_INDICATOR);
+        char bufWkReset[48];
+        snprintf(bufWkReset, sizeof(bufWkReset), "Reset: %s", data.quotaWeeklyResetTime.c_str());
+        lv_label_set_text(labelWkResetObj, bufWkReset);
 
-    // Overlay Card Logic
-    if (data.reLoginRequired || !data.authValid) {
+        lv_bar_set_value(barWkObj, (int32_t)data.quotaWeeklyPct, LV_ANIM_ON);
+        lv_obj_set_style_bg_color(barWkObj, getQuotaBarColor(data.quotaWeeklyPct), LV_PART_INDICATOR);
+    } else {
+        lv_label_set_text(labelWkPctObj, "Sin datos");
+        lv_obj_set_style_text_color(labelWkPctObj, lv_color_hex(0x64748B), LV_PART_MAIN);
+        lv_label_set_text(labelWkResetObj, "");
+        lv_bar_set_value(barWkObj, 0, LV_ANIM_OFF);
+        lv_obj_set_style_bg_color(barWkObj, lv_color_hex(0x334155), LV_PART_INDICATOR);
+    }
+
+    // re_login_required is the sole overlay trigger; a transient auth-probe
+    // failure (auth_state == "unknown") must never raise it.
+    if (data.reLoginRequired) {
         lv_obj_clear_flag(overlayObj, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_obj_add_flag(overlayObj, LV_OBJ_FLAG_HIDDEN);
     }
+
+    // One timestamp for both windows so they never drift by a tick.
+    uint32_t seedAtMs = millis();
+
+    CountdownState &state5h = _countdownClaude;
+    if (data.quota5hAvailable && data.quota5hResetIn >= 0) {
+        state5h.available = true;
+        state5h.seedSeconds = data.quota5hResetIn;
+        state5h.seedAtMs = seedAtMs;
+    } else {
+        state5h.available = false;
+    }
+
+    CountdownState &stateWeekly = _countdownWeeklyClaude;
+    if (data.quotaWeeklyAvailable && data.quotaWeeklyResetIn >= 0) {
+        stateWeekly.available = true;
+        stateWeekly.seedSeconds = data.quotaWeeklyResetIn;
+        stateWeekly.seedAtMs = seedAtMs;
+    } else {
+        stateWeekly.available = false;
+    }
+
+    tickCountdown();
 }
 
 void UIManager::updateClaude(const ProviderUIData &data) {
-    updateScreenWidgets(data, _pillClaude, _pillLabelClaude,
+    updateScreenWidgets(data, _pillClaude, _pillLabelClaude, _staleBadgeClaude,
                         _bar5hClaude, _label5hPctClaude, _label5hResetClaude,
                         _barWkClaude, _labelWkPctClaude, _labelWkResetClaude,
                         _overlayClaude);
 }
 
-void UIManager::updateAntigravity(const ProviderUIData &data) {
-    updateScreenWidgets(data, _pillAntigravity, _pillLabelAntigravity,
-                        _bar5hAntigravity, _label5hPctAntigravity, _label5hResetAntigravity,
-                        _barWkAntigravity, _labelWkPctAntigravity, _labelWkResetAntigravity,
-                        _overlayAntigravity);
+void UIManager::tickCountdown() {
+    tickOneCountdown(_countdownClaude, _countdownCaptionClaude, _countdownValueClaude,
+                     "RESET 5H");
+    tickOneCountdown(_countdownWeeklyClaude, _countdownCaptionWeeklyClaude,
+                     _countdownValueWeeklyClaude, "RESET SEMANAL");
 }
 
-void UIManager::showScreen(uint8_t screenIdx) {
-    _activeScreen = screenIdx % 2;
-    updateIndicatorDots();
-}
+void UIManager::tickOneCountdown(CountdownState &state, lv_obj_t *captionObj,
+                                 lv_obj_t *valueObj, const char *captionText) {
+    if (!captionObj || !valueObj) return;
 
-void UIManager::updateIndicatorDots() {
-    if (_activeScreen == 0) {
-        lv_obj_set_style_bg_color(_dot1, lv_color_hex(0x38BDF8), LV_PART_MAIN); // Active Sky Blue
-        lv_obj_set_style_bg_color(_dot2, lv_color_hex(0x334155), LV_PART_MAIN); // Dimmed Slate
-    } else {
-        lv_obj_set_style_bg_color(_dot1, lv_color_hex(0x334155), LV_PART_MAIN);
-        lv_obj_set_style_bg_color(_dot2, lv_color_hex(0x38BDF8), LV_PART_MAIN);
+    if (!state.available) {
+        lv_label_set_text(captionObj, "Sin datos");
+        lv_label_set_text(valueObj, "--:--:--");
+        lv_obj_set_style_text_color(valueObj, lv_color_hex(0x475569), LV_PART_MAIN);
+        return;
     }
+
+    // millis() wraps every ~49 days; unsigned subtraction stays correct
+    // across that wrap since both operands are uint32_t.
+    uint32_t elapsedMs = millis() - state.seedAtMs;
+    int32_t remaining = state.seedSeconds - (int32_t)(elapsedMs / 1000);
+    if (remaining < 0) remaining = 0;
+
+    char buf[16];
+    formatCountdown(remaining, buf, sizeof(buf));
+    lv_label_set_text(valueObj, buf);
+    lv_label_set_text(captionObj, captionText);
+    lv_obj_set_style_text_color(valueObj, lv_color_hex(0xF8FAFC), LV_PART_MAIN);
 }
 
-void UIManager::handleSwipeGesture(lv_dir_t dir) {
-    if (dir == LV_DIR_LEFT && _activeScreen == 0) {
-        lv_tileview_set_tile_act(_screenTileview, 1, 0, LV_ANIM_ON);
-        showScreen(1);
-    } else if (dir == LV_DIR_RIGHT && _activeScreen == 1) {
-        lv_tileview_set_tile_act(_screenTileview, 0, 0, LV_ANIM_ON);
-        showScreen(0);
-    }
+void UIManager::countdownTimerCb(lv_timer_t *timer) {
+    ui.tickCountdown();
 }
