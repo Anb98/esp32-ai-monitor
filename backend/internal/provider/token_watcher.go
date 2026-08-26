@@ -28,14 +28,15 @@ func (w *TokenWatcher) PollOnce(ctx context.Context) (*model.DashboardResponse, 
 	for _, eng := range w.engines {
 		p, err := eng.FetchMetrics(ctx)
 		if err != nil {
-			// In case of unexpected engine error, create safe fallback record
+			// Engine failure proves nothing about auth validity: unknown,
+			// never a false re-login prompt.
 			p = &model.Provider{
-				ID:              eng.ID(),
-				Name:            eng.Name(),
-				Status:          model.StatusDegraded,
-				AuthValid:       false,
-				ReLoginRequired: true,
+				ID:     eng.ID(),
+				Name:   eng.Name(),
+				Status: model.StatusDegraded,
+				Stale:  true,
 			}
+			p.ApplyAuthState(model.AuthStateUnknown)
 		}
 		providers = append(providers, *p)
 	}
