@@ -1,5 +1,8 @@
 #include "imu_qmi8658.h"
 #include "touch_cst9220.h"
+#include "ui_manager.h"
+#include "display_co5300.h"
+#include "pmic_axp2101.h"
 #include <Wire.h>
 #include "esp_log.h"
 #include <math.h>
@@ -92,17 +95,20 @@ DeviceOrientation IMUQMI8658::calculateOrientation(float ax, float ay, float az)
         return _currentOrientation;
     }
 
+    // Axis map measured on this board: held upright the accelerometer reads
+    // ax = -1.0, so that case is the zero position. The rest follow a quarter
+    // turn apart from it.
     if (fabsf(ax) > fabsf(ay)) {
-        if (ax > 0.5f) {
-            return DeviceOrientation::ROTATION_270;
-        } else if (ax < -0.5f) {
-            return DeviceOrientation::ROTATION_90;
+        if (ax < -0.5f) {
+            return DeviceOrientation::ROTATION_0;
+        } else if (ax > 0.5f) {
+            return DeviceOrientation::ROTATION_180;
         }
     } else {
         if (ay > 0.5f) {
-            return DeviceOrientation::ROTATION_180;
+            return DeviceOrientation::ROTATION_90;
         } else if (ay < -0.5f) {
-            return DeviceOrientation::ROTATION_0;
+            return DeviceOrientation::ROTATION_270;
         }
     }
 
@@ -118,6 +124,8 @@ void IMUQMI8658::update() {
     DeviceOrientation detected = calculateOrientation(ax, ay, az);
     uint32_t now = millis();
 
+
+
     if (detected != _currentOrientation) {
         if (detected != _candidateOrientation) {
             _candidateOrientation = detected;
@@ -126,12 +134,22 @@ void IMUQMI8658::update() {
             _currentOrientation = _candidateOrientation;
             ESP_LOGI(TAG, "Orientation stabilized to: %d", (int)_currentOrientation);
 
-            // Update display rotation and touch mapping
-            lv_disp_t *disp = lv_disp_get_default();
-            if (disp) {
-                lv_disp_set_rotation(disp, (lv_disp_rot_t)_currentOrientation);
+            // Update display rotation and touch mapping. This runs on the
+            // sensors task while the LVGL task may be mid-render, and LVGL is
+            // not thread-safe: with sw_rotate enabled, set_rotation
+            // invalidates and recomputes the whole screen, so an unlocked call
+            // here corrupts whatever is being flushed.
+            if (ui.uiLock()) {
+                display.setRotation((uint8_t)_currentOrientation);
+                touch.setRotation((uint8_t)_currentOrientation);
+                ui.uiUnlock();
             }
-            touch.setRotation((uint8_t)_currentOrientation);
+            // Turning the device is deliberate user activity: a rotation that
+            // renders onto a dimmed or suspended panel is wasted. Kept outside
+            // the lock above because wakeScreen() takes it itself, and the UI
+            // mutex is not recursive: re-taking it here blocks for the full
+            // 100ms timeout and then silently skips the wake.
+            pmic.wakeScreen();
         }
     } else {
         _candidateOrientation = _currentOrientation;
