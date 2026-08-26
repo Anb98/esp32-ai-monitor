@@ -15,11 +15,15 @@ static const char *TAG = "MAIN";
 TaskHandle_t lvglTaskHandle = NULL;
 TaskHandle_t sensorsTaskHandle = NULL;
 TaskHandle_t networkTaskHandle = NULL;
+TaskHandle_t audioTaskHandle = NULL;
 
 void lvglTask(void *pvParameters) {
     ESP_LOGI(TAG, "LVGL Task started on core %d", xPortGetCoreID());
     while (1) {
-        lv_timer_handler();
+        if (ui.uiLock()) {
+            lv_timer_handler();
+            ui.uiUnlock();
+        }
         vTaskDelay(pdMS_TO_TICKS(5));
     }
 }
@@ -29,6 +33,7 @@ void sensorsTask(void *pvParameters) {
     while (1) {
         imu.update();
         pmic.handleButtonPress();
+        pmic.updateAutoDim();
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
@@ -38,6 +43,13 @@ void networkTask(void *pvParameters) {
     while (1) {
         networkClient.taskLoop();
         vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
+
+void audioTask(void *pvParameters) {
+    ESP_LOGI(TAG, "Audio Task started on core %d", xPortGetCoreID());
+    while (1) {
+        audio.taskLoop();
     }
 }
 
@@ -51,30 +63,38 @@ void setup() {
     // 1. Initialize PMIC power rails
     pmic.init();
 
-    // 2. Initialize CO5300 AMOLED display
+    // 2. Bring up LVGL before anything touches it. display.init() registers a
+    // display driver, which allocates from LVGL's heap; without this the very
+    // first lv_mem_alloc() dereferences a null pool and panics the core.
+    lv_init();
+
+    // 3. Initialize CO5300 AMOLED display
     if (!display.init()) {
         ESP_LOGE(TAG, "Display initialization failed!");
     }
 
-    // 3. Initialize CST9220 Touch controller
+    // 4. Initialize CST9220 Touch controller
     touch.init();
 
-    // 4. Initialize QMI8658 6-Axis IMU
+    // 5. Initialize QMI8658 6-Axis IMU
     imu.init();
 
-    // 5. Initialize ES8311 Audio Codec
+    // 6. Initialize ES8311 Audio Codec
     audio.init();
+    audio.createQueue();
 
-    // 6. Initialize UI Engine (LVGL dual screens)
+    // 7. Initialize UI Engine (LVGL single screen)
+    ui.createLock();
     ui.init();
 
-    // 7. Initialize Network & Wi-Fi
+    // 8. Initialize Network & Wi-Fi
     networkClient.init();
 
-    // 8. Create FreeRTOS tasks pinned to cores
+    // 9. Create FreeRTOS tasks pinned to cores
     xTaskCreatePinnedToCore(lvglTask, "LVGL_Task", 8192, NULL, 5, &lvglTaskHandle, 1);
     xTaskCreatePinnedToCore(sensorsTask, "Sensors_Task", 4096, NULL, 3, &sensorsTaskHandle, 1);
     xTaskCreatePinnedToCore(networkTask, "Network_Task", 8192, NULL, 2, &networkTaskHandle, 0);
+    xTaskCreatePinnedToCore(audioTask, "Audio_Task", 4096, NULL, 2, &audioTaskHandle, 1);
 
     ESP_LOGI(TAG, "All subsystems initialized and FreeRTOS tasks running.");
 }
