@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   ai-monitor-backend:
     build:
@@ -11,12 +9,16 @@ services:
       - "8080:8080"
     environment:
       - PORT=8080
-      - CLAUDE_CONFIG_DIR=/root/.claude
-      - GEMINI_CONFIG_DIR=/root/.gemini
-      - GOMEMLIMIT=8MiB
+      # reset_time is formatted in local time; without TZ the container is UTC
+      # and every clock the firmware shows is offset. tzdata ships in the image.
+      - TZ=${TZ:-UTC}
+      # The image runs as non-root appuser, so credentials mount under its
+      # own home: /root is mode 0700 and unreadable to uid 1000.
+      - HOME=/home/appuser
+      - CLAUDE_CONFIG_DIR=/home/appuser/.claude
     volumes:
-      - ${HOME}/.claude:/root/.claude:ro
-      - ${HOME}/.gemini:/root/.gemini:ro
+      - ${HOST_HOME}/.claude:/home/appuser/.claude:ro
+      - ${HOST_HOME}/.claude.json:/home/appuser/.claude.json:ro
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
       interval: 30s
