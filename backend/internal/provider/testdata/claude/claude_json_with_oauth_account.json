@@ -1,0 +1,10 @@
+{
+  "numStartups": 42,
+  "installMethod": "unknown",
+  "oauthAccount": {
+    "emailAddress": "test-fixture@example.com",
+    "organizationUuid": "11111111-1111-1111-1111-111111111111",
+    "organizationRole": "member"
+  },
+  "projects": {}
+}

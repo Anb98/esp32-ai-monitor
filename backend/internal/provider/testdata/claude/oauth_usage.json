@@ -1,0 +1,43 @@
+{
+  "five_hour": {
+    "utilization": 7.0,
+    "resets_at": "2026-08-25T20:00:00.368848+00:00",
+    "limit_dollars": null,
+    "used_dollars": null,
+    "remaining_dollars": null
+  },
+  "seven_day": {
+    "utilization": 44.0,
+    "resets_at": "2026-08-30T15:00:00.368867+00:00",
+    "limit_dollars": null,
+    "used_dollars": null,
+    "remaining_dollars": null
+  },
+  "limits": [
+    {
+      "kind": "session",
+      "group": "session",
+      "percent": 7,
+      "severity": "normal",
+      "resets_at": "2026-08-25T20:00:00.368848+00:00",
+      "scope": null,
+      "is_active": false
+    },
+    {
+      "kind": "weekly_all",
+      "group": "weekly",
+      "percent": 44,
+      "severity": "normal",
+      "resets_at": "2026-08-30T15:00:00.368867+00:00",
+      "scope": null,
+      "is_active": false
+    }
+  ],
+  "extra_usage": {
+    "is_enabled": true,
+    "monthly_limit": 1000,
+    "used_credits": 1006.0,
+    "utilization": 100.0,
+    "currency": "USD"
+  }
+}
