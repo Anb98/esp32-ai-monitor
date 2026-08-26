@@ -11,8 +11,10 @@ public:
     void sleep();
     void wake();
     void setBrightness(uint8_t brightness);
+    void setRotation(uint8_t rotation);
     bool isSleeping() const { return _sleeping; }
 
+    static void rounderCallback(lv_disp_drv_t *disp_drv, lv_area_t *area);
     static void flushCallback(lv_disp_drv_t *disp_drv, const lv_area_t *area, lv_color_t *color_p);
 
 private:
@@ -21,6 +23,7 @@ private:
     void writeCmd(uint32_t cmd);
     void writeData(const uint8_t *data, size_t len);
     void writeCmdData(uint32_t cmd, const uint8_t *data, size_t len);
+    void writePixels(const uint8_t *data, size_t len);
 
     bool _sleeping;
     lv_disp_draw_buf_t _drawBuf;
