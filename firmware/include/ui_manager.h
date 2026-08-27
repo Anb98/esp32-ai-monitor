@@ -61,8 +61,7 @@ private:
                              lv_obj_t *barWkObj, lv_obj_t *labelWkPctObj, lv_obj_t *labelWkResetObj,
                              lv_obj_t *overlayObj);
     void tickCountdown();
-    void tickOneCountdown(CountdownState &state, lv_obj_t *captionObj, lv_obj_t *valueObj,
-                          const char *captionText);
+    void tickOneCountdown(CountdownState &state, lv_obj_t *valueObj);
     lv_color_t getQuotaBarColor(float pct);
     static void countdownTimerCb(lv_timer_t *timer);
 

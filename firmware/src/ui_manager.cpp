@@ -21,6 +21,19 @@ static void formatCountdown(int32_t totalSeconds, char *buf, size_t bufLen) {
     }
 }
 
+// The backend leaves reset_time empty when upstream published the window with no
+// resets_at, and a bare "Reset: " prefix reads as a broken label rather than as
+// a missing clock.
+static void setResetLabel(lv_obj_t *label, const String &resetTime) {
+    if (resetTime.isEmpty()) {
+        lv_label_set_text(label, "");
+        return;
+    }
+    char buf[48];
+    snprintf(buf, sizeof(buf), "Reset: %s", resetTime.c_str());
+    lv_label_set_text(label, buf);
+}
+
 UIManager::UIManager()
     : _lock(nullptr),
       _cardClaude(nullptr),
@@ -318,9 +331,7 @@ void UIManager::updateScreenWidgets(const ProviderUIData &data,
         lv_label_set_text(label5hPctObj, buf5h);
         lv_obj_set_style_text_color(label5hPctObj, lv_color_hex(0xF8FAFC), LV_PART_MAIN);
 
-        char buf5hReset[48];
-        snprintf(buf5hReset, sizeof(buf5hReset), "Reset: %s", data.quota5hResetTime.c_str());
-        lv_label_set_text(label5hResetObj, buf5hReset);
+        setResetLabel(label5hResetObj, data.quota5hResetTime);
 
         lv_bar_set_value(bar5hObj, (int32_t)data.quota5hPct, LV_ANIM_ON);
         lv_obj_set_style_bg_color(bar5hObj, getQuotaBarColor(data.quota5hPct), LV_PART_INDICATOR);
@@ -339,9 +350,7 @@ void UIManager::updateScreenWidgets(const ProviderUIData &data,
         lv_label_set_text(labelWkPctObj, bufWk);
         lv_obj_set_style_text_color(labelWkPctObj, lv_color_hex(0xF8FAFC), LV_PART_MAIN);
 
-        char bufWkReset[48];
-        snprintf(bufWkReset, sizeof(bufWkReset), "Reset: %s", data.quotaWeeklyResetTime.c_str());
-        lv_label_set_text(labelWkResetObj, bufWkReset);
+        setResetLabel(labelWkResetObj, data.quotaWeeklyResetTime);
 
         lv_bar_set_value(barWkObj, (int32_t)data.quotaWeeklyPct, LV_ANIM_ON);
         lv_obj_set_style_bg_color(barWkObj, getQuotaBarColor(data.quotaWeeklyPct), LV_PART_INDICATOR);
@@ -393,33 +402,35 @@ void UIManager::updateClaude(const ProviderUIData &data) {
 }
 
 void UIManager::tickCountdown() {
-    tickOneCountdown(_countdownClaude, _countdownCaptionClaude, _countdownValueClaude,
-                     "RESET 5H");
-    tickOneCountdown(_countdownWeeklyClaude, _countdownCaptionWeeklyClaude,
-                     _countdownValueWeeklyClaude, "RESET SEMANAL");
+    tickOneCountdown(_countdownClaude, _countdownValueClaude);
+    tickOneCountdown(_countdownWeeklyClaude, _countdownValueWeeklyClaude);
 }
 
-void UIManager::tickOneCountdown(CountdownState &state, lv_obj_t *captionObj,
-                                 lv_obj_t *valueObj, const char *captionText) {
-    if (!captionObj || !valueObj) return;
+void UIManager::tickOneCountdown(CountdownState &state, lv_obj_t *valueObj) {
+    if (!valueObj) return;
 
-    if (!state.available) {
-        lv_label_set_text(captionObj, "Sin datos");
+    // millis() wraps every ~49 days; unsigned subtraction stays correct
+    // across that wrap since both operands are uint32_t.
+    uint32_t elapsedMs = millis() - state.seedAtMs;
+    int32_t remaining = state.available
+                            ? state.seedSeconds - (int32_t)(elapsedMs / 1000)
+                            : 0;
+
+    // A non-positive remainder is the absence of a reset clock, not a countdown
+    // that legitimately hit zero: either the backend published the window with
+    // no resets_at (a fresh 5h window with no usage reports exactly that), or
+    // the last seed ran out because no poll has landed since. Both must read as
+    // no data instead of a bright 00:00:00 that passes for a live reading. The
+    // caption is a section title, so it stays put and only the value drops out.
+    if (remaining <= 0) {
         lv_label_set_text(valueObj, "--:--:--");
         lv_obj_set_style_text_color(valueObj, lv_color_hex(0x475569), LV_PART_MAIN);
         return;
     }
 
-    // millis() wraps every ~49 days; unsigned subtraction stays correct
-    // across that wrap since both operands are uint32_t.
-    uint32_t elapsedMs = millis() - state.seedAtMs;
-    int32_t remaining = state.seedSeconds - (int32_t)(elapsedMs / 1000);
-    if (remaining < 0) remaining = 0;
-
     char buf[16];
     formatCountdown(remaining, buf, sizeof(buf));
     lv_label_set_text(valueObj, buf);
-    lv_label_set_text(captionObj, captionText);
     lv_obj_set_style_text_color(valueObj, lv_color_hex(0xF8FAFC), LV_PART_MAIN);
 }
 
