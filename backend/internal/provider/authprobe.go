@@ -238,7 +238,26 @@ func (a *AuthProber) shouldProbe(now, credMtime time.Time) bool {
 	if !credMtime.IsZero() && credMtime.After(a.lastMtime) {
 		return true
 	}
-	return now.Sub(a.lastProbeAt) >= a.nextInterval()
+	elapsed := now.Sub(a.lastProbeAt)
+	// A cached window past its own resets_at describes a window that no longer
+	// exists upstream, so waiting out the flat TTL just serves a dead reading.
+	// Re-probe at the backoff floor instead. Skipped while probes are failing,
+	// where the backoff owns the cadence.
+	if a.consecFails == 0 && a.quotaWindowExpired(now) && elapsed >= probeBackoffMin {
+		return true
+	}
+	return elapsed >= a.nextInterval()
+}
+
+// quotaWindowExpired reports whether any cached window's resets_at moment has
+// already passed.
+func (a *AuthProber) quotaWindowExpired(now time.Time) bool {
+	for _, w := range []QuotaWindowInfo{a.lastQuota.FiveHour, a.lastQuota.SevenDay} {
+		if w.Available && !w.ResetsAt.IsZero() && now.After(w.ResetsAt) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *AuthProber) nextInterval() time.Duration {

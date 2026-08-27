@@ -390,3 +390,41 @@ func TestAuthProber_LastQuota_CapturedFromProbe(t *testing.T) {
 		t.Errorf("expected LastQuota to expose the quota parsed by the probe, got %+v", got)
 	}
 }
+
+func TestAuthProber_WindowPastResetsAt_ForcesEarlyReProbe(t *testing.T) {
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	resetsAt := t0.Add(1 * time.Minute)
+
+	calls := 0
+	prober := provider.NewAuthProber(http.DefaultClient, func(ctx context.Context, client *http.Client, token string) (provider.ProbeOutcome, provider.ProbeQuota) {
+		calls++
+		return provider.ProbeOutcomeValid, provider.ProbeQuota{
+			FiveHour: provider.QuotaWindowInfo{Available: true, Percentage: 97, ResetsAt: resetsAt},
+		}
+	})
+	cred := provider.CredResult{State: provider.CredFound, AccessToken: "tok", ExpiresAt: t0.Add(24 * time.Hour)}
+
+	prober.Classify(context.Background(), cred, time.Time{}, t0)
+	if calls != 1 {
+		t.Fatalf("expected 1 probe call, got %d", calls)
+	}
+
+	// Window still open: the flat TTL owns the cadence, no re-probe.
+	prober.Classify(context.Background(), cred, time.Time{}, t0.Add(45*time.Second))
+	if calls != 1 {
+		t.Errorf("expected no re-probe while the window is still open, got %d calls", calls)
+	}
+
+	// Past resets_at but far inside the 5m TTL: the reset boundary must force
+	// the probe instead of leaving a dead window on screen for minutes.
+	prober.Classify(context.Background(), cred, time.Time{}, t0.Add(70*time.Second))
+	if calls != 2 {
+		t.Errorf("expected an early re-probe once resets_at passed, got %d calls", calls)
+	}
+
+	// Inside the 30s floor: a still-expired cached window must not hammer.
+	prober.Classify(context.Background(), cred, time.Time{}, t0.Add(90*time.Second))
+	if calls != 2 {
+		t.Errorf("expected the 30s floor to hold off another forced probe, got %d calls", calls)
+	}
+}
