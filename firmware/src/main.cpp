@@ -80,7 +80,9 @@ void setup() {
     imu.init();
 
     // 6. Initialize ES8311 Audio Codec
-    audio.init();
+    if (!audio.init()) {
+        ESP_LOGE(TAG, "Audio initialization failed!");
+    }
     audio.createQueue();
 
     // 7. Initialize UI Engine (LVGL single screen)

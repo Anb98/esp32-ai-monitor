@@ -25,7 +25,7 @@ The firmware polls `GET /api/dashboard` every few seconds and renders a single C
 
 - **Quota at a glance** — 5-hour and weekly usage bars with their percentage, plus a live countdown to each reset, ticked on-device at 1 Hz (`HH:MM:SS`, or `Nd HH:MM` when the reset is days out). The backend seeds that countdown in seconds, so the board never needs a real clock.
 - **Provider health** — the current Claude service status from the upstream status feed, shown as a pill on the card.
-- **Audio alerts** — the ES8311 codec plays an alert tone when the provider degrades and a chime when it recovers, so a status change is noticeable without looking at the screen.
+- **Audio alerts** — the ES8311 codec plays a notification sound twice (PCM embedded in flash, no on-device decoding) when the provider degrades and a chime when it recovers, so a status change is noticeable without looking at the screen.
 - **Honest empty states** — a `SIN CONEXION` badge when data is stale (either the backend says so, or no poll has succeeded in `STALE_AFTER_MS`), `Sin datos` when a quota window has no real reading, and a full-screen overlay only when Claude genuinely needs a re-login — never on a transient probe failure.
 - **Accelerometer rotation** — the QMI8658 IMU detects the board's orientation and rotates the panel in hardware via MADCTL, so there is no per-frame CPU cost. A confirmed turn also wakes the screen.
 - **Auto-dim and suspend** — the AXP2101 dims the panel after `AUTO_DIM_MS` of inactivity and can sleep it after `AUTO_SLEEP_MS`. The KEY button (`GPIO18`) suspends and wakes it on demand, and a touch, a button press or a rotation all count as activity and restore full brightness.

@@ -29,16 +29,14 @@ static void setResetLabel(lv_obj_t *label, const String &resetTime) {
         lv_label_set_text(label, "");
         return;
     }
-    char buf[48];
-    snprintf(buf, sizeof(buf), "Reset: %s", resetTime.c_str());
-    lv_label_set_text(label, buf);
+    lv_label_set_text_fmt(label, "Reset: %s", resetTime.c_str());
 }
 
 UIManager::UIManager()
     : _lock(nullptr),
       _cardClaude(nullptr),
-      _countdownClaude{false, 0, 0},
-      _countdownWeeklyClaude{false, 0, 0},
+      _countdownClaude{0, 0},
+      _countdownWeeklyClaude{0, 0},
       _pillClaude(nullptr),
       _pillLabelClaude(nullptr),
       _staleBadgeClaude(nullptr),
@@ -49,9 +47,7 @@ UIManager::UIManager()
       _labelWkPctClaude(nullptr),
       _labelWkResetClaude(nullptr),
       _overlayClaude(nullptr),
-      _countdownCaptionClaude(nullptr),
       _countdownValueClaude(nullptr),
-      _countdownCaptionWeeklyClaude(nullptr),
       _countdownValueWeeklyClaude(nullptr) {}
 
 void UIManager::createLock() {
@@ -102,8 +98,7 @@ void UIManager::createScreenViews() {
                         &_bar5hClaude, &_label5hPctClaude, &_label5hResetClaude,
                         &_barWkClaude, &_labelWkPctClaude, &_labelWkResetClaude,
                         &_overlayClaude,
-                        &_countdownCaptionClaude, &_countdownValueClaude,
-                        &_countdownCaptionWeeklyClaude, &_countdownValueWeeklyClaude);
+                        &_countdownValueClaude, &_countdownValueWeeklyClaude);
 }
 
 void UIManager::buildProviderScreen(const char *title, lv_obj_t **screenObj,
@@ -111,8 +106,7 @@ void UIManager::buildProviderScreen(const char *title, lv_obj_t **screenObj,
                                     lv_obj_t **bar5hObj, lv_obj_t **label5hPctObj, lv_obj_t **label5hResetObj,
                                     lv_obj_t **barWkObj, lv_obj_t **labelWkPctObj, lv_obj_t **labelWkResetObj,
                                     lv_obj_t **overlayObj,
-                                    lv_obj_t **countdownCaptionObj, lv_obj_t **countdownValueObj,
-                                    lv_obj_t **countdownCaptionWeeklyObj, lv_obj_t **countdownValueWeeklyObj) {
+                                    lv_obj_t **countdownValueObj, lv_obj_t **countdownValueWeeklyObj) {
     lv_obj_t *parent = *screenObj;
     lv_obj_clear_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -166,8 +160,8 @@ void UIManager::buildProviderScreen(const char *title, lv_obj_t **screenObj,
     lv_obj_align(lbl5hHeader, LV_ALIGN_TOP_LEFT, 36, 78);
 
     *label5hPctObj = lv_label_create(parent);
-    lv_label_set_text(*label5hPctObj, "0.0%");
-    lv_obj_set_style_text_color(*label5hPctObj, lv_color_hex(0xF8FAFC), LV_PART_MAIN);
+    lv_label_set_text(*label5hPctObj, "Sin datos");
+    lv_obj_set_style_text_color(*label5hPctObj, lv_color_hex(0x64748B), LV_PART_MAIN);
     lv_obj_set_style_text_font(*label5hPctObj, &lv_font_montserrat_24, LV_PART_MAIN);
     lv_obj_align(*label5hPctObj, LV_ALIGN_TOP_RIGHT, -36, 76);
 
@@ -181,7 +175,7 @@ void UIManager::buildProviderScreen(const char *title, lv_obj_t **screenObj,
     lv_bar_set_value(*bar5hObj, 0, LV_ANIM_ON);
 
     *label5hResetObj = lv_label_create(parent);
-    lv_label_set_text(*label5hResetObj, "Reset: 00:00");
+    lv_label_set_text(*label5hResetObj, "");
     lv_obj_set_style_text_color(*label5hResetObj, lv_color_hex(0x64748B), LV_PART_MAIN);
     lv_obj_set_style_text_font(*label5hResetObj, &lv_font_montserrat_20, LV_PART_MAIN);
     lv_obj_align(*label5hResetObj, LV_ALIGN_TOP_LEFT, 36, 136);
@@ -194,8 +188,8 @@ void UIManager::buildProviderScreen(const char *title, lv_obj_t **screenObj,
     lv_obj_align(lblWkHeader, LV_ALIGN_TOP_LEFT, 36, 170);
 
     *labelWkPctObj = lv_label_create(parent);
-    lv_label_set_text(*labelWkPctObj, "0.0%");
-    lv_obj_set_style_text_color(*labelWkPctObj, lv_color_hex(0xF8FAFC), LV_PART_MAIN);
+    lv_label_set_text(*labelWkPctObj, "Sin datos");
+    lv_obj_set_style_text_color(*labelWkPctObj, lv_color_hex(0x64748B), LV_PART_MAIN);
     lv_obj_set_style_text_font(*labelWkPctObj, &lv_font_montserrat_24, LV_PART_MAIN);
     lv_obj_align(*labelWkPctObj, LV_ALIGN_TOP_RIGHT, -36, 168);
 
@@ -209,7 +203,7 @@ void UIManager::buildProviderScreen(const char *title, lv_obj_t **screenObj,
     lv_bar_set_value(*barWkObj, 0, LV_ANIM_ON);
 
     *labelWkResetObj = lv_label_create(parent);
-    lv_label_set_text(*labelWkResetObj, "Reset: Dom 00:00");
+    lv_label_set_text(*labelWkResetObj, "");
     lv_obj_set_style_text_color(*labelWkResetObj, lv_color_hex(0x64748B), LV_PART_MAIN);
     lv_obj_set_style_text_font(*labelWkResetObj, &lv_font_montserrat_20, LV_PART_MAIN);
     lv_obj_align(*labelWkResetObj, LV_ALIGN_TOP_LEFT, 36, 228);
@@ -230,11 +224,11 @@ void UIManager::buildProviderScreen(const char *title, lv_obj_t **screenObj,
     // weekly window reads as 28px context below it. A 4px caption-to-value gap
     // binds each pair; the 16px gap between pairs separates them. Both stay
     // above y=165 so the re-login overlay covers them completely.
-    *countdownCaptionObj = lv_label_create(countdownCont);
-    lv_label_set_text(*countdownCaptionObj, "RESET 5H");
-    lv_obj_set_style_text_color(*countdownCaptionObj, lv_color_hex(0x94A3B8), LV_PART_MAIN);
-    lv_obj_set_style_text_font(*countdownCaptionObj, &lv_font_montserrat_16, LV_PART_MAIN);
-    lv_obj_align(*countdownCaptionObj, LV_ALIGN_TOP_MID, 0, 4);
+    lv_obj_t *countdownCaptionObj = lv_label_create(countdownCont);
+    lv_label_set_text(countdownCaptionObj, "RESET 5H");
+    lv_obj_set_style_text_color(countdownCaptionObj, lv_color_hex(0x94A3B8), LV_PART_MAIN);
+    lv_obj_set_style_text_font(countdownCaptionObj, &lv_font_montserrat_16, LV_PART_MAIN);
+    lv_obj_align(countdownCaptionObj, LV_ALIGN_TOP_MID, 0, 4);
 
     *countdownValueObj = lv_label_create(countdownCont);
     lv_label_set_text(*countdownValueObj, "--:--:--");
@@ -242,11 +236,11 @@ void UIManager::buildProviderScreen(const char *title, lv_obj_t **screenObj,
     lv_obj_set_style_text_font(*countdownValueObj, &lv_font_montserrat_48, LV_PART_MAIN);
     lv_obj_align(*countdownValueObj, LV_ALIGN_TOP_MID, 0, 26);
 
-    *countdownCaptionWeeklyObj = lv_label_create(countdownCont);
-    lv_label_set_text(*countdownCaptionWeeklyObj, "RESET SEMANAL");
-    lv_obj_set_style_text_color(*countdownCaptionWeeklyObj, lv_color_hex(0x94A3B8), LV_PART_MAIN);
-    lv_obj_set_style_text_font(*countdownCaptionWeeklyObj, &lv_font_montserrat_16, LV_PART_MAIN);
-    lv_obj_align(*countdownCaptionWeeklyObj, LV_ALIGN_TOP_MID, 0, 92);
+    lv_obj_t *countdownCaptionWeeklyObj = lv_label_create(countdownCont);
+    lv_label_set_text(countdownCaptionWeeklyObj, "RESET SEMANAL");
+    lv_obj_set_style_text_color(countdownCaptionWeeklyObj, lv_color_hex(0x94A3B8), LV_PART_MAIN);
+    lv_obj_set_style_text_font(countdownCaptionWeeklyObj, &lv_font_montserrat_16, LV_PART_MAIN);
+    lv_obj_align(countdownCaptionWeeklyObj, LV_ALIGN_TOP_MID, 0, 92);
 
     *countdownValueWeeklyObj = lv_label_create(countdownCont);
     lv_label_set_text(*countdownValueWeeklyObj, "--:--:--");
@@ -326,6 +320,10 @@ void UIManager::updateScreenWidgets(const ProviderUIData &data,
 
     // 5h Quota Bar & Labels
     if (data.quota5hAvailable) {
+        // Kept as snprintf + lv_label_set_text, not lv_label_set_text_fmt:
+        // lv_conf.h leaves LV_SPRINTF_USE_FLOAT unset (defaults to 0), so
+        // LVGL's built-in lv_vsnprintf drops %f entirely. Converting this site
+        // needs that flag flipped and a flash-time visual check first.
         char buf5h[32];
         snprintf(buf5h, sizeof(buf5h), "%.1f%%", data.quota5hPct);
         lv_label_set_text(label5hPctObj, buf5h);
@@ -345,6 +343,7 @@ void UIManager::updateScreenWidgets(const ProviderUIData &data,
 
     // Weekly Quota Bar & Labels
     if (data.quotaWeeklyAvailable) {
+        // Same LV_SPRINTF_USE_FLOAT constraint as the 5h site above.
         char bufWk[32];
         snprintf(bufWk, sizeof(bufWk), "%.1f%%", data.quotaWeeklyPct);
         lv_label_set_text(labelWkPctObj, bufWk);
@@ -373,23 +372,15 @@ void UIManager::updateScreenWidgets(const ProviderUIData &data,
     // One timestamp for both windows so they never drift by a tick.
     uint32_t seedAtMs = millis();
 
-    CountdownState &state5h = _countdownClaude;
-    if (data.quota5hAvailable && data.quota5hResetIn >= 0) {
-        state5h.available = true;
-        state5h.seedSeconds = data.quota5hResetIn;
-        state5h.seedAtMs = seedAtMs;
-    } else {
-        state5h.available = false;
-    }
+    // seedSeconds == 0 means this window has no live reset clock. A zero
+    // resetIn is absence, not a countdown that already reached zero.
+    _countdownClaude.seedSeconds =
+        (data.quota5hAvailable && data.quota5hResetIn > 0) ? data.quota5hResetIn : 0;
+    _countdownClaude.seedAtMs = seedAtMs;
 
-    CountdownState &stateWeekly = _countdownWeeklyClaude;
-    if (data.quotaWeeklyAvailable && data.quotaWeeklyResetIn >= 0) {
-        stateWeekly.available = true;
-        stateWeekly.seedSeconds = data.quotaWeeklyResetIn;
-        stateWeekly.seedAtMs = seedAtMs;
-    } else {
-        stateWeekly.available = false;
-    }
+    _countdownWeeklyClaude.seedSeconds =
+        (data.quotaWeeklyAvailable && data.quotaWeeklyResetIn > 0) ? data.quotaWeeklyResetIn : 0;
+    _countdownWeeklyClaude.seedAtMs = seedAtMs;
 
     tickCountdown();
 }
@@ -402,29 +393,35 @@ void UIManager::updateClaude(const ProviderUIData &data) {
 }
 
 void UIManager::tickCountdown() {
-    tickOneCountdown(_countdownClaude, _countdownValueClaude);
-    tickOneCountdown(_countdownWeeklyClaude, _countdownValueWeeklyClaude);
+    tickOneCountdown(_countdownClaude, _countdownValueClaude, _label5hResetClaude);
+    tickOneCountdown(_countdownWeeklyClaude, _countdownValueWeeklyClaude, _labelWkResetClaude);
 }
 
-void UIManager::tickOneCountdown(CountdownState &state, lv_obj_t *valueObj) {
+void UIManager::tickOneCountdown(CountdownState &state, lv_obj_t *valueObj, lv_obj_t *resetLabelObj) {
     if (!valueObj) return;
 
-    // millis() wraps every ~49 days; unsigned subtraction stays correct
-    // across that wrap since both operands are uint32_t.
-    uint32_t elapsedMs = millis() - state.seedAtMs;
-    int32_t remaining = state.available
-                            ? state.seedSeconds - (int32_t)(elapsedMs / 1000)
-                            : 0;
+    // millis() wraps every ~49 days; unsigned subtraction stays correct across
+    // that wrap since both operands are uint32_t. A seed older than the interval
+    // it described has expired: no poll has landed since, so it is stale, not a
+    // countdown that legitimately reached zero.
+    uint32_t elapsedSec = (millis() - state.seedAtMs) / 1000;
+    bool live = state.seedSeconds > 0 && elapsedSec < (uint32_t)state.seedSeconds;
+    int32_t remaining = live ? state.seedSeconds - (int32_t)elapsedSec : 0;
 
     // A non-positive remainder is the absence of a reset clock, not a countdown
     // that legitimately hit zero: either the backend published the window with
     // no resets_at (a fresh 5h window with no usage reports exactly that), or
-    // the last seed ran out because no poll has landed since. Both must read as
-    // no data instead of a bright 00:00:00 that passes for a live reading. The
+    // the seed expired because no poll has landed since. Both must read as no
+    // data instead of a bright 00:00:00 that passes for a live reading. The
     // caption is a section title, so it stays put and only the value drops out.
     if (remaining <= 0) {
         lv_label_set_text(valueObj, "--:--:--");
         lv_obj_set_style_text_color(valueObj, lv_color_hex(0x475569), LV_PART_MAIN);
+        // The reset clock and the countdown answer the same question, so they
+        // share one criterion. Without this the label keeps a bright
+        // "Reset: 8:00 PM" beside a dim "--:--:--" whenever the backend clamps
+        // reset_in_seconds to 0 while still publishing reset_time.
+        if (resetLabelObj) lv_label_set_text(resetLabelObj, "");
         return;
     }
 

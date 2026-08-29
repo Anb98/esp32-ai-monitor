@@ -23,10 +23,14 @@ public:
     void stop();
 
 private:
-    void initI2C();
-    void initI2S();
+    bool writeReg(uint8_t reg, uint8_t value);
+    bool writeRegRetry(uint8_t reg, uint8_t value);
+    bool initI2C();
+    bool initI2S();
+    void writeMono(const int16_t *samples, size_t count, float gain);
     void playSequence(SoundType type);
     void playTone(float freqHz, uint32_t durationMs);
+    void playPcm(const int16_t *samples, size_t count);
 
     uint8_t _volume;
     bool _initialized;

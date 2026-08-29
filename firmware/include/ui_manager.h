@@ -41,8 +41,8 @@ private:
     // Countdown seed state, resynced from each poll and ticked locally by a
     // 1Hz LVGL timer (the firmware has no NTP/wall clock). Declared ahead of
     // the methods because tickOneCountdown takes it by reference.
+    // seedSeconds == 0 means this window has no live reset clock.
     struct CountdownState {
-        bool available;
         int32_t seedSeconds;
         uint32_t seedAtMs;
     };
@@ -53,15 +53,14 @@ private:
                              lv_obj_t **bar5hObj, lv_obj_t **label5hPctObj, lv_obj_t **label5hResetObj,
                              lv_obj_t **barWkObj, lv_obj_t **labelWkPctObj, lv_obj_t **labelWkResetObj,
                              lv_obj_t **overlayObj,
-                             lv_obj_t **countdownCaptionObj, lv_obj_t **countdownValueObj,
-                             lv_obj_t **countdownCaptionWeeklyObj, lv_obj_t **countdownValueWeeklyObj);
+                             lv_obj_t **countdownValueObj, lv_obj_t **countdownValueWeeklyObj);
     void updateScreenWidgets(const ProviderUIData &data,
                              lv_obj_t *pillObj, lv_obj_t *pillLabelObj, lv_obj_t *staleBadgeObj,
                              lv_obj_t *bar5hObj, lv_obj_t *label5hPctObj, lv_obj_t *label5hResetObj,
                              lv_obj_t *barWkObj, lv_obj_t *labelWkPctObj, lv_obj_t *labelWkResetObj,
                              lv_obj_t *overlayObj);
     void tickCountdown();
-    void tickOneCountdown(CountdownState &state, lv_obj_t *valueObj);
+    void tickOneCountdown(CountdownState &state, lv_obj_t *valueObj, lv_obj_t *resetLabelObj);
     lv_color_t getQuotaBarColor(float pct);
     static void countdownTimerCb(lv_timer_t *timer);
 
@@ -82,9 +81,7 @@ private:
     lv_obj_t *_labelWkPctClaude;
     lv_obj_t *_labelWkResetClaude;
     lv_obj_t *_overlayClaude;
-    lv_obj_t *_countdownCaptionClaude;
     lv_obj_t *_countdownValueClaude;
-    lv_obj_t *_countdownCaptionWeeklyClaude;
     lv_obj_t *_countdownValueWeeklyClaude;
 };
 
