@@ -76,3 +76,4 @@
 #define AUTO_SLEEP_MS     0      // 0 = disabled; deeper AXP2101 power-off after this much inactivity
 #define DIM_LEVEL         40     // 0-255 brightness while dimmed
 #define STALE_AFTER_MS    90000  // ms without a successful poll before "SIN CONEXION"; must exceed POLL_INTERVAL_MS or the badge flashes every cycle
+#define BATTERY_REFRESH_S 15     // seconds between battery indicator refreshes (ticks of the 1Hz UI timer)

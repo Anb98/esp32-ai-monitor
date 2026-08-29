@@ -1,4 +1,5 @@
 #include "ui_manager.h"
+#include "pmic_axp2101.h"
 #include "esp_log.h"
 
 static const char *TAG = "UIManager";
@@ -48,7 +49,11 @@ UIManager::UIManager()
       _labelWkResetClaude(nullptr),
       _overlayClaude(nullptr),
       _countdownValueClaude(nullptr),
-      _countdownValueWeeklyClaude(nullptr) {}
+      _countdownValueWeeklyClaude(nullptr),
+      _batteryLabel(nullptr),
+      _batteryVisible(false),
+      _batteryCharging(false),
+      _batteryPct(255) {}
 
 void UIManager::createLock() {
     _lock = xSemaphoreCreateMutex();
@@ -99,6 +104,15 @@ void UIManager::createScreenViews() {
                         &_barWkClaude, &_labelWkPctClaude, &_labelWkResetClaude,
                         &_overlayClaude,
                         &_countdownValueClaude, &_countdownValueWeeklyClaude);
+
+    // Battery indicator, bottom-left to mirror the 36px side margins. Hidden
+    // until a poll confirms a battery is attached (USB-only boards never show it).
+    _batteryLabel = lv_label_create(_cardClaude);
+    lv_label_set_text(_batteryLabel, "");
+    lv_obj_set_style_text_color(_batteryLabel, lv_color_hex(0x94A3B8), LV_PART_MAIN);
+    lv_obj_set_style_text_font(_batteryLabel, &lv_font_montserrat_16, LV_PART_MAIN);
+    lv_obj_align(_batteryLabel, LV_ALIGN_BOTTOM_LEFT, 36, -24);
+    lv_obj_add_flag(_batteryLabel, LV_OBJ_FLAG_HIDDEN);
 }
 
 void UIManager::buildProviderScreen(const char *title, lv_obj_t **screenObj,
@@ -431,6 +445,33 @@ void UIManager::tickOneCountdown(CountdownState &state, lv_obj_t *valueObj, lv_o
     lv_obj_set_style_text_color(valueObj, lv_color_hex(0xF8FAFC), LV_PART_MAIN);
 }
 
+void UIManager::updateBattery() {
+    if (!_batteryLabel) return;
+    PMICAXP2101::BatteryStatus st = pmic.batteryStatus();
+    if (!st.valid) return; // keep the last shown state on a failed I2C read
+    if (st.present == _batteryVisible && st.charging == _batteryCharging &&
+        st.percent == _batteryPct) return;
+    _batteryVisible = st.present;
+    _batteryCharging = st.charging;
+    _batteryPct = st.percent;
+    if (!st.present) {
+        lv_obj_add_flag(_batteryLabel, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    const char *sym = st.percent > 87 ? LV_SYMBOL_BATTERY_FULL
+                    : st.percent > 62 ? LV_SYMBOL_BATTERY_3
+                    : st.percent > 37 ? LV_SYMBOL_BATTERY_2
+                    : st.percent > 12 ? LV_SYMBOL_BATTERY_1
+                                      : LV_SYMBOL_BATTERY_EMPTY;
+    lv_label_set_text_fmt(_batteryLabel, "%s%s %u%%",
+                          st.charging ? LV_SYMBOL_CHARGE " " : "", sym, (unsigned)st.percent);
+    lv_obj_clear_flag(_batteryLabel, LV_OBJ_FLAG_HIDDEN);
+}
+
 void UIManager::countdownTimerCb(lv_timer_t *timer) {
     ui.tickCountdown();
+    // PMIC reads ride the existing 1Hz timer; touch already does I2C from this
+    // task, so the shared-bus locking assumptions stay unchanged.
+    static uint32_t ticks = 0;
+    if (ticks++ % BATTERY_REFRESH_S == 0) ui.updateBattery();
 }

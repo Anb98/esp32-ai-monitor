@@ -11,11 +11,13 @@ static const char *TAG = "AXP2101";
 PMICAXP2101 pmic;
 
 #define AXP2101_STATUS1     0x00
+#define AXP2101_STATUS2     0x01
 #define AXP2101_POWER_ON_OFF_DCDC 0x80
 #define AXP2101_POWER_ON_OFF_LDO  0x90
 #define AXP2101_BLDO1_VOLTAGE     0x96
+#define AXP2101_BATT_PERCENT      0xA4
 
-PMICAXP2101::PMICAXP2101() : _screenSuspended(false), _dimmed(false), _buttonWasDown(false), _suspendedAtMs(0), _lastButtonPressTime(0) {}
+PMICAXP2101::PMICAXP2101() : _found(false), _screenSuspended(false), _dimmed(false), _buttonWasDown(false), _suspendedAtMs(0), _lastButtonPressTime(0) {}
 
 void PMICAXP2101::writeRegister(uint8_t reg, uint8_t val) {
     Wire.beginTransmission(AXP2101_I2C_ADDR);
@@ -43,6 +45,7 @@ bool PMICAXP2101::init() {
     if (Wire.endTransmission() != 0) {
         ESP_LOGW(TAG, "AXP2101 PMIC not found on I2C bus (may be directly powered)");
     } else {
+        _found = true;
         // Set BLDO1 to 3.3V for AMOLED power
         setAMOLEDVoltage(3300);
         enableAMOLED(true);
@@ -65,6 +68,35 @@ void PMICAXP2101::setAMOLEDVoltage(uint16_t millivolts) {
     // BLDO1 voltage step configuration
     uint8_t step = (millivolts - 500) / 100;
     writeRegister(AXP2101_BLDO1_VOLTAGE, step);
+}
+
+// Error-checked read: the legacy readRegister() returns in-band sentinels
+// (0 on a write-phase NACK, 0xFF when the read phase yields no data), which
+// are indistinguishable from real battery data.
+bool PMICAXP2101::readRegister(uint8_t reg, uint8_t &out) {
+    Wire.beginTransmission(AXP2101_I2C_ADDR);
+    Wire.write(reg);
+    if (Wire.endTransmission() != 0) return false;
+    if (Wire.requestFrom((uint8_t)AXP2101_I2C_ADDR, (uint8_t)1) != 1) return false;
+    int v = Wire.read();
+    if (v < 0) return false;
+    out = (uint8_t)v;
+    return true;
+}
+
+PMICAXP2101::BatteryStatus PMICAXP2101::batteryStatus() {
+    BatteryStatus st = {};
+    uint8_t s1, s2, pct;
+    if (!_found || !readRegister(AXP2101_STATUS1, s1) ||
+        !readRegister(AXP2101_STATUS2, s2) ||
+        !readRegister(AXP2101_BATT_PERCENT, pct)) {
+        return st;
+    }
+    st.valid = true;
+    st.present = s1 & 0x08;
+    st.charging = ((s2 >> 5) & 0x03) == 0x01;
+    st.percent = pct > 100 ? 100 : pct;
+    return st;
 }
 
 void PMICAXP2101::enableAMOLED(bool enable) {

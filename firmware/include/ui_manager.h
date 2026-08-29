@@ -61,6 +61,7 @@ private:
                              lv_obj_t *overlayObj);
     void tickCountdown();
     void tickOneCountdown(CountdownState &state, lv_obj_t *valueObj, lv_obj_t *resetLabelObj);
+    void updateBattery();
     lv_color_t getQuotaBarColor(float pct);
     static void countdownTimerCb(lv_timer_t *timer);
 
@@ -83,6 +84,10 @@ private:
     lv_obj_t *_overlayClaude;
     lv_obj_t *_countdownValueClaude;
     lv_obj_t *_countdownValueWeeklyClaude;
+    lv_obj_t *_batteryLabel;
+    bool _batteryVisible;
+    bool _batteryCharging;
+    uint8_t _batteryPct;
 };
 
 extern UIManager ui;
